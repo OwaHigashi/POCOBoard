@@ -279,6 +279,31 @@ class _Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def _read_body(self, max_bytes: int) -> bytes:
+        # Reverse proxies sometimes switch a POST to Transfer-Encoding:
+        # chunked and drop the Content-Length header — in which case the
+        # simple self.rfile.read(n) path below fails with n=0 and we'd
+        # return an empty body.  Handle both.
+        te = self.headers.get("Transfer-Encoding", "").lower()
+        if "chunked" in te:
+            out = bytearray()
+            while True:
+                size_line = self.rfile.readline().strip()
+                if not size_line:
+                    break
+                try:
+                    size = int(size_line.split(b";")[0], 16)
+                except ValueError:
+                    break
+                if size == 0:
+                    # discard trailers
+                    while self.rfile.readline().strip():
+                        pass
+                    break
+                if len(out) + size > max_bytes:
+                    return b""
+                out.extend(self.rfile.read(size))
+                self.rfile.read(2)   # CRLF after chunk
+            return bytes(out)
         try:
             n = int(self.headers.get("Content-Length", "0"))
         except ValueError:
@@ -432,8 +457,15 @@ class _Handler(BaseHTTPRequestHandler):
             cid, label, ip, new_cookie = self._who()
             if self._reject_if_not_allowed(cid, label, "TALK", new_cookie):
                 return
-            data = self._read_body(64 * 1024)
+            data = self._read_body(256 * 1024)   # generous — reverse proxies can pad
             if not data:
+                # Log the empty hit so the operator can see chunks ARE reaching
+                # the server but with zero body (proxy buffering / header stripping).
+                te_hdr = self.headers.get("Transfer-Encoding", "")
+                cl_hdr = self.headers.get("Content-Length", "")
+                self.bridge.emit_log(
+                    "TALK",
+                    f"{now_hms}  {label:24s}  TALK      X empty body  (CL={cl_hdr!r} TE={te_hdr!r})")
                 self._send_json(400, {"ok": False, "reason": "empty"},
                                 set_cookie=new_cookie)
                 return
@@ -448,7 +480,7 @@ class _Handler(BaseHTTPRequestHandler):
                 secs = len(data) // 2 / sr
                 self.bridge.emit_log(
                     "TALK",
-                    f"{now_hms}  {label:24s}  TALK      ({sr} Hz, ~{secs:.1f}s chunks)",
+                    f"{now_hms}  {label:24s}  TALK      ({sr} Hz, {len(data)} B, ~{secs:.1f} s)",
                 )
             self._send_json(200, {"ok": True}, set_cookie=new_cookie)
             return

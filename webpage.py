@@ -315,6 +315,32 @@ let talkActive = false;
 let talkCtx = null, talkStream = null, talkProc = null, talkSrc = null;
 let talkFrames = [];
 let talkSendTimer = null;
+// Diagnostics — surfaced below the TALK button so problems are visible.
+let talkStats = { sent: 0, bytes: 0, errors: 0, lastErr: '' };
+
+function ensureTalkStatusLine() {
+  let el = document.getElementById('talkStatus');
+  if (el) return el;
+  const btn = document.getElementById('btnTalk');
+  el = document.createElement('div');
+  el.id = 'talkStatus';
+  el.style.cssText = 'font-size:11px; opacity:.75; margin-top:4px; '
+    + 'text-align:center; font-family:Consolas,monospace; grid-column: auto;';
+  btn.insertAdjacentElement('afterend', el);
+  return el;
+}
+
+function renderTalkStatus(extra) {
+  const el = ensureTalkStatusLine();
+  if (!talkActive && !extra) { el.textContent = ''; return; }
+  const secure = window.isSecureContext ? 'HTTPS ✓' : 'HTTP ✗';
+  const kb = (talkStats.bytes / 1024).toFixed(1);
+  const msg = talkActive
+    ? `${secure}  /  送信 ${talkStats.sent}件 (${kb} KB)  /  エラー ${talkStats.errors}`
+    : (extra || '');
+  el.textContent = msg + (talkStats.lastErr ? '  [' + talkStats.lastErr + ']' : '');
+  el.style.color = talkStats.errors > 0 ? '#ff8080' : '';
+}
 
 function updateTalkUi() {
   const btn = document.getElementById('btnTalk');
@@ -326,6 +352,7 @@ function updateTalkUi() {
     btn.classList.remove('recording');
     btn.textContent = '🎙 TALK';
   }
+  renderTalkStatus();
 }
 
 function drainAndSend() {
@@ -362,20 +389,49 @@ function drainAndSend() {
   }
   if (pcm.length === 0) return;
 
+  const bytes = pcm.byteLength;
   fetch(api('talk?sr=' + TALK_TARGET_SR), {
     method: 'POST',
     headers: {'Content-Type': 'application/octet-stream'},
     body: pcm.buffer
-  }).catch(() => {});
+  }).then(r => {
+    if (r.ok) {
+      talkStats.sent++;
+      talkStats.bytes += bytes;
+      talkStats.lastErr = '';
+    } else {
+      talkStats.errors++;
+      talkStats.lastErr = 'HTTP ' + r.status;
+    }
+    renderTalkStatus();
+  }).catch(e => {
+    talkStats.errors++;
+    talkStats.lastErr = e.message || 'network';
+    renderTalkStatus();
+  });
 }
 
 async function talkStart() {
+  talkStats = { sent: 0, bytes: 0, errors: 0, lastErr: '' };
+  if (!window.isSecureContext) {
+    const url = location.href;
+    renderTalkStatus('マイク不可: このURL (' + url + ') は Secure Context ではありません。HTTPS で開き直してください。');
+    alert('マイクは HTTPS か localhost でしか開けません。\nこのページの URL を HTTPS に変えるか、'
+        + 'リバースプロキシ経由でアクセスしてください。\n\n現在の URL:\n' + url);
+    return;
+  }
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    renderTalkStatus('マイク API がこのブラウザで使えません。');
+    alert('このブラウザは getUserMedia に対応していません。');
+    return;
+  }
   try {
     talkStream = await navigator.mediaDevices.getUserMedia({
       audio: { channelCount: 1, noiseSuppression: true,
                echoCancellation: true, autoGainControl: true }
     });
   } catch (e) {
+    renderTalkStatus('マイク取得失敗: ' + e.message);
     alert('マイクを開けませんでした: ' + e.message +
           '\n(HTTPS または localhost でアクセスしているか確認してください)');
     return;
