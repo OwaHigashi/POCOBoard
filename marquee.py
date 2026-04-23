@@ -72,9 +72,14 @@ _POS_RE = re.compile(r"<(/?)(?:ue|top|shita|bottom|naka|middle)>", re.IGNORECASE
 
 # Default on-screen lifetime for pinned messages.
 PIN_DURATION_S = 3.0
-# Default traversal speed: 6 seconds for speed=1 (Niconico-ish).
-# scroll_time_s = 6 / speed → speed=1 6s, speed=3 2s, speed=5 1.2s.
-SCROLL_BASE_TIME_S = 6.0
+# Scroll speed is **pixels per second**, not a duration — so a long
+# message and a short one travel at exactly the same visual pace, just
+# the long one takes more wall-clock time to finish crossing.  Niconico
+# works the same way; that's the reading experience people expect.
+#
+# At speed=1 the marquee covers ~320 px/s, so a 1920 px-wide screen is
+# crossed by a short line in ~6 s and a 1500 px long line in ~11 s.
+SCROLL_PX_PER_S = 320.0
 
 
 @dataclass
@@ -310,8 +315,9 @@ class MarqueeEngine:
 
         if kind == "scroll":
             lane = self._pick_scroll_lane(n_lanes, area_w)
-            duration_s = SCROLL_BASE_TIME_S / speed
-            px_per_s = (area_w + total_w + 40) / duration_s
+            # Constant pixels-per-second so speed is independent of text
+            # length.  Speed 1..5 just scales it (1 = calm, 5 = fast).
+            px_per_s = SCROLL_PX_PER_S * speed
             self.tracks.append(Track(
                 kind="scroll",
                 runs=laid, total_width=total_w, max_ascent=asc, max_descent=desc,

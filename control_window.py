@@ -515,7 +515,8 @@ class ControlWindow(QWidget):
         hint = QLabel(
             "タグ早見: <r><g><b><y><c><m><o><pink><w>  / "
             "<small><big>  / <u></u>  <hl></hl>  / "
-            "<ue> <shita>  —  <br>速度 x1(6秒)〜x5(1.2秒)で画面を横断。")
+            "<ue> <shita>  —  <br>"
+            "速度 x1〜x5。ピクセル/秒固定 (文字数に関わらず同じ速度で流れます)。")
         hint.setProperty("class", "small")
         hint.setWordWrap(True)
         ml.addWidget(hint)
