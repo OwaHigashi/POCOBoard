@@ -394,13 +394,40 @@ class ControlWindow(QWidget):
         self.btnStop.setProperty("class", "clear")
         self.btnStop.setMinimumHeight(48)
         self.btnStop.clicked.connect(self._on_stop)
-        top.addWidget(self.btnStop, 2)
-        self.btnQueueClear = QPushButton("キュー全削除")
+        top.addWidget(self.btnStop, 3)
+
+        # ▶ 次へ: pop the top of the queue and play it (useful when push-play
+        # is on, or to advance past a paused-in-queue stack).
+        self.btnNext = QPushButton("▶ 次へ")
+        self.btnNext.setMinimumHeight(48)
+        self.btnNext.setStyleSheet(
+            "background:#1b7f3a; color:#fff; border:1px solid #2a9a4a;"
+            "border-radius:10px; font-weight:800; font-size:15px;")
+        self.btnNext.clicked.connect(self._on_next)
+        top.addWidget(self.btnNext, 2)
+
+        # Auto-play / push-play toggle.  Default = auto-play: new uploads
+        # appear on the display immediately (no 再生 click required).
+        self.btnAutoplay = QPushButton("自動再生 ON")
+        self.btnAutoplay.setCheckable(True)
+        self.btnAutoplay.setChecked(True)
+        self.btnAutoplay.setMinimumHeight(48)
+        self.btnAutoplay.setToolTip(
+            "ON  : 受け取った瞬間に表示（キューを素通り）\n"
+            "OFF : キューに積んで、再生/次へボタンで送り出す")
+        self.btnAutoplay.clicked.connect(self._on_toggle_autoplay)
+        top.addWidget(self.btnAutoplay, 2)
+
+        self.btnQueueClear = QPushButton("全削除")
         self.btnQueueClear.setProperty("class", "stop")
         self.btnQueueClear.setMinimumHeight(48)
         self.btnQueueClear.clicked.connect(self._on_queue_clear)
         top.addWidget(self.btnQueueClear, 1)
         layout.addLayout(top)
+
+        # Initial button style for the autoplay toggle.
+        self._autoplay = True
+        self._apply_autoplay_style()
 
         # Now-playing indicator (kept compact; highlights what 停止 will kill)
         self.lblNowPlaying = QLabel("再生中: (なし)")
@@ -761,18 +788,79 @@ class ControlWindow(QWidget):
             # QTabBar tab-text color for tab 0 — a bright orange dot of attention
             self.tabs.tabBar().setTabTextColor(0, Qt.GlobalColor.yellow)
 
+    def _dispatch_play(self, item: QueueItem, origin: str = "manual") -> None:
+        """Route a taken queue item to display / audio engine.
+
+        `origin` is just a log tag — "auto" when the autoplay handler
+        triggered us, "manual" for an explicit 再生/次へ click.
+        """
+        if item.kind == "image":
+            self.display.show_image(item.path, caption=f"from {item.sender}")
+        elif item.kind == "video":
+            self.display.play_video(item.path)
+        elif item.kind == "audio":
+            self.audio.play_audio_file(item.path)
+        self.queue.mark_playing(item)
+        tag = "自動再生" if origin == "auto" else "再生"
+        self._log_local("ADMIN",
+                        f"{tag}: {item.kind} {item.filename} (by {item.sender})")
+
     def _on_play_item(self, item: QueueItem) -> None:
         taken = self.queue.take(item.id)
-        if taken is None:
+        if taken is not None:
+            self._dispatch_play(taken, origin="manual")
+
+    def _on_next(self) -> None:
+        items = self.queue.items()
+        if not items:
+            # Nothing to advance to — subtle feedback via button flash.
+            self.btnNext.setStyleSheet(
+                "background:#333; color:#888; border:1px solid #444;"
+                "border-radius:10px; font-weight:800; font-size:15px;")
+            QTimer.singleShot(400, lambda:
+                self.btnNext.setStyleSheet(
+                    "background:#1b7f3a; color:#fff; border:1px solid #2a9a4a;"
+                    "border-radius:10px; font-weight:800; font-size:15px;"))
             return
-        if taken.kind == "image":
-            self.display.show_image(taken.path, caption=f"from {taken.sender}")
-        elif taken.kind == "video":
-            self.display.play_video(taken.path)
-        elif taken.kind == "audio":
-            self.audio.play_audio_file(taken.path)
-        self.queue.mark_playing(taken)
-        self._log_local("ADMIN", f"再生: {taken.kind} {taken.filename} (by {taken.sender})")
+        self._on_play_item(items[0])
+
+    def _on_toggle_autoplay(self) -> None:
+        self._autoplay = self.btnAutoplay.isChecked()
+        self._apply_autoplay_style()
+        self._log_local("ADMIN",
+            f"モード: {'自動再生 ON (受信即表示)' if self._autoplay else 'プッシュ再生 (手動で再生)'}")
+        # When switching ON while the queue has items, drain just the
+        # first one — matches "receiving triggers display" — rest wait
+        # for the next upload or the 次へ button.
+        if self._autoplay:
+            items = self.queue.items()
+            if items and self.queue.playing_visual() is None and \
+               self.queue.playing_audio() is None:
+                self._on_play_item(items[0])
+
+    def _apply_autoplay_style(self) -> None:
+        if self._autoplay:
+            self.btnAutoplay.setText("自動再生 ON")
+            self.btnAutoplay.setStyleSheet(
+                "background:#1b7f3a; color:#fff; border:1px solid #2a9a4a;"
+                "border-radius:10px; font-weight:800; font-size:15px;"
+                "padding:6px 10px;")
+        else:
+            self.btnAutoplay.setText("プッシュ再生 (手動)")
+            self.btnAutoplay.setStyleSheet(
+                "background:#7f4a1b; color:#fff; border:1px solid #9a6a2a;"
+                "border-radius:10px; font-weight:800; font-size:15px;"
+                "padding:6px 10px;")
+
+    @Slot(str, str, str, str, str)
+    def on_media_uploaded(self, cid: str, label: str, ip: str,
+                          kind: str, path: str) -> None:
+        """Entry point for remote media arrivals (wired in pocoboard.py)."""
+        item = self.queue.enqueue(kind, path, label)
+        if self._autoplay:
+            taken = self.queue.take(item.id)
+            if taken is not None:
+                self._dispatch_play(taken, origin="auto")
 
     def _on_delete_item(self, item: QueueItem) -> None:
         self.queue.remove(item.id)
