@@ -1,0 +1,25 @@
+# PyInstaller build artifacts
+build/
+dist/
+
+# Runtime caches (uploaded media, user-supplied config)
+cache/
+config.ini
+
+# Python bytecode
+__pycache__/
+*.pyc
+*.pyo
+
+# Scratch files used during development — never meant to be tracked
+_*.py
+_*.png
+_*.ico
+_*.output
+
+# IDE / OS
+.vscode/
+.idea/
+.claude/
+.DS_Store
+Thumbs.db
