@@ -1,26 +1,43 @@
 @echo off
-REM ---- POCOBoard — install Python dependencies -----------------------
-REM For source-run only (run.bat). 完成版 POCOBoard.exe は依存不要です。
+REM POCOBoard - install Python dependencies for source-run (run.bat).
+REM The pre-built POCOBoard.exe does NOT need this.
 
-setlocal
+setlocal ENABLEEXTENSIONS
 cd /d "%~dp0"
 
-where python >nul 2>nul
-if errorlevel 1 (
-    echo [!] Python が見つかりません。
-    echo     https://www.python.org/downloads/ から Python 3.10 以降を入れてください。
-    echo     インストーラで "Add python.exe to PATH" を必ずチェックしてください。
+set "PY="
+for %%C in (python.exe) do set "PY=%%~$PATH:C"
+if not defined PY (
+    where /q py && set "PY=py -3"
+)
+if not defined PY if exist "%LOCALAPPDATA%\Programs\Python\Python313\python.exe" set "PY=%LOCALAPPDATA%\Programs\Python\Python313\python.exe"
+if not defined PY if exist "%LOCALAPPDATA%\Programs\Python\Python312\python.exe" set "PY=%LOCALAPPDATA%\Programs\Python\Python312\python.exe"
+if not defined PY if exist "%LOCALAPPDATA%\Programs\Python\Python311\python.exe" set "PY=%LOCALAPPDATA%\Programs\Python\Python311\python.exe"
+if not defined PY if exist "%LOCALAPPDATA%\Programs\Python\Python310\python.exe" set "PY=%LOCALAPPDATA%\Programs\Python\Python310\python.exe"
+
+if not defined PY (
+    echo.
+    echo =====================================================================
+    echo  Python was not found on this machine.
+    echo.
+    echo  Install Python 3.10 or newer from:
+    echo    https://www.python.org/downloads/
+    echo.
+    echo  During installation, CHECK "Add python.exe to PATH", then re-run.
+    echo =====================================================================
+    echo.
     pause
     exit /b 1
 )
 
-python -m pip install --user PySide6
+echo [+] Python: %PY%
+"%PY%" -m pip install --user PySide6
 if errorlevel 1 (
-    echo [!] PySide6 のインストールに失敗しました。
+    echo [!] PySide6 install failed.
     pause
     exit /b 1
 )
 echo.
-echo [ok] PySide6 を導入しました。run.bat をダブルクリックで起動できます。
+echo [OK] PySide6 installed.  Now double-click run.bat to start POCOBoard.
 pause
 endlocal
