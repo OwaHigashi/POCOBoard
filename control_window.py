@@ -291,8 +291,18 @@ class ControlWindow(QWidget):
         self.tabs.addTab(self._build_display_tab(), "🖥 表示")
         self.tabs.addTab(self._build_users_tab(),    "👥 ユーザー")
         self.tabs.addTab(self._build_log_tab(),      "📜 ログ")
+        # Clear the attention color once the operator actually looks at the queue.
+        self.tabs.currentChanged.connect(self._on_tab_changed)
         root.addWidget(self.tabs, stretch=1)
         self._refresh_queue()
+
+    def _on_tab_changed(self, idx: int) -> None:
+        # Reset the queue-tab highlight color once the operator is on that tab.
+        if idx == 0 and hasattr(self, "tabs"):
+            # PySide6 doesn't expose the "default" color cleanly, so we clear
+            # by passing an invalid QColor which restores the stylesheet default.
+            from PySide6.QtGui import QColor
+            self.tabs.tabBar().setTabTextColor(0, QColor())
 
     # ---- top header ----
     def _build_header(self) -> QHBoxLayout:
@@ -731,6 +741,25 @@ class ControlWindow(QWidget):
             self.lblNowPlaying.setText("再生中: (なし)")
         else:
             self.lblNowPlaying.setText("再生中:\n" + "\n".join(lines))
+
+        # Tab-title badge: show pending count so the operator notices
+        # a new upload is waiting even when they're looking at another tab.
+        # The queue tab is index 0 (see _build_ui).
+        self._update_queue_tab_badge(len(items))
+
+    def _update_queue_tab_badge(self, n: int) -> None:
+        if not hasattr(self, "tabs"):
+            return
+        label = "📥 キュー" if n == 0 else f"📥 キュー ({n})"
+        self.tabs.setTabText(0, label)
+        # When a new item arrives and we're NOT looking at the queue tab,
+        # color the tab label to draw the operator's eye. Cleared when the
+        # tab is selected (see currentChanged hook).
+        prev = getattr(self, "_last_queue_count", 0)
+        self._last_queue_count = n
+        if n > prev and self.tabs.currentIndex() != 0:
+            # QTabBar tab-text color for tab 0 — a bright orange dot of attention
+            self.tabs.tabBar().setTabTextColor(0, Qt.GlobalColor.yellow)
 
     def _on_play_item(self, item: QueueItem) -> None:
         taken = self.queue.take(item.id)
