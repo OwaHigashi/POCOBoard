@@ -175,11 +175,10 @@ def main() -> int:
     display.marqueeStatusChanged.connect(ctrl.on_marquee_changed)
     bridge.requestLogged.connect(ctrl.on_request_logged)
     bridge.clientsChanged.connect(ctrl.refresh_users)
-    # Uploaded media goes into the queue; playback is operator-initiated
-    # from the control window's キュー tab.
-    def _on_media(cid, label, ip, kind, path):
-        media_queue.enqueue(kind, path, label)
-    bridge.mediaUploaded.connect(_on_media)
+    # Uploaded media flows through the control window: it enqueues, and
+    # (if auto-play is ON, which is the default) also triggers immediate
+    # display.  Push-play mode keeps items waiting for the ▶ button.
+    bridge.mediaUploaded.connect(ctrl.on_media_uploaded)
 
     # ----- HTTP server -----
     upload_dir = os.path.join(here, "cache", "uploads")
