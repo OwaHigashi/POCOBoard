@@ -39,6 +39,7 @@ class QueueItem:
     size:      int        # bytes
     sender:    str        # e.g. "Alice (#abcd1234)"
     added_ms:  float
+    cid:       str = ""   # uploader client_id (for per-user stop/cancel)
 
 
 class MediaQueue(QObject):
@@ -57,7 +58,8 @@ class MediaQueue(QObject):
         self._playing_audio:  Optional[QueueItem] = None
 
     # ---------- inbound ----------
-    def enqueue(self, kind: str, path: str, sender: str) -> QueueItem:
+    def enqueue(self, kind: str, path: str, sender: str,
+                cid: str = "") -> QueueItem:
         try:
             size = os.path.getsize(path)
         except OSError:
@@ -73,10 +75,34 @@ class MediaQueue(QObject):
             size=size,
             sender=sender or "?",
             added_ms=time.time() * 1000,
+            cid=cid or "",
         )
         self._items.append(item)
         self.changed.emit()
         return item
+
+    def remove_by_cid(self, cid: str) -> list[QueueItem]:
+        """Drop every queued item uploaded by `cid` and delete its file.
+
+        Used by the per-client "自分の投稿を取消" button in the browser.
+        """
+        if not cid:
+            return []
+        dropped: list[QueueItem] = []
+        kept: list[QueueItem] = []
+        for it in self._items:
+            if it.cid == cid:
+                dropped.append(it)
+                try:
+                    os.remove(it.path)
+                except OSError:
+                    pass
+            else:
+                kept.append(it)
+        if dropped:
+            self._items = kept
+            self.changed.emit()
+        return dropped
 
     # ---------- queries ----------
     def items(self) -> list[QueueItem]:

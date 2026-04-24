@@ -572,8 +572,9 @@ class ControlWindow(QWidget):
 
         hint = QLabel(
             "※ リモートからアップロードされた画像/動画/音声は自動で背景になります。"
-            " 画像は設定秒数で自動消去、動画は config の video_loops で指定した回数再生後に終了。"
-            " 停止は「停止」ボタンで。")
+            " 画像は設定秒数で自動消去、動画/音声は config の media_min_play_sec (既定 60 秒)"
+            " 以上再生してから自然終了します（短い素材は最低時間までループ）。"
+            " 強制停止は「停止」ボタンで。")
         hint.setProperty("class", "small")
         hint.setWordWrap(True)
         dl.addWidget(hint, 4, 0, 1, 3)
@@ -695,6 +696,7 @@ class ControlWindow(QWidget):
         "NAME":         "#c0b4ff",
         "LOCAL":        "#e0b0ff",
         "ADMIN":        "#ffccff",
+        "MY/STOP":      "#ffaa70",
     }
 
     @Slot(str, str)
@@ -816,11 +818,11 @@ class ControlWindow(QWidget):
         triggered us, "manual" for an explicit 再生/次へ click.
         """
         if item.kind == "image":
-            self.display.show_image(item.path, caption=f"from {item.sender}")
+            self.display.show_image(item.path, f"from {item.sender}", item.cid)
         elif item.kind == "video":
-            self.display.play_video(item.path)
+            self.display.play_video(item.path, item.cid)
         elif item.kind == "audio":
-            self.audio.play_audio_file(item.path)
+            self.audio.play_audio_file(item.path, item.cid)
         self.queue.mark_playing(item)
         tag = "自動再生" if origin == "auto" else "再生"
         self._log_local("ADMIN",
@@ -877,11 +879,38 @@ class ControlWindow(QWidget):
     def on_media_uploaded(self, cid: str, label: str, ip: str,
                           kind: str, path: str) -> None:
         """Entry point for remote media arrivals (wired in pocoboard.py)."""
-        item = self.queue.enqueue(kind, path, label)
+        item = self.queue.enqueue(kind, path, label, cid=cid)
         if self._autoplay:
             taken = self.queue.take(item.id)
             if taken is not None:
                 self._dispatch_play(taken, origin="auto")
+
+    @Slot(str, str)
+    def on_my_stop(self, cid: str, kind: str) -> None:
+        """Handle a per-client /my/stop request.
+
+        Stops only items uploaded by this `cid`, both currently playing
+        and still queued.  Other users' items are untouched.
+        """
+        kinds = ("image", "video", "audio") if kind == "all" else (kind,)
+        did_any = False
+        for k in kinds:
+            if k == "image" and self.display._bg_image_owner == cid:
+                self.display.clear_image_bg()
+                did_any = True
+            elif k == "video" and self.display._video_owner == cid:
+                self.display.stop_video()
+                did_any = True
+            elif k == "audio" and self.audio.file_owner() == cid:
+                self.audio.stop_audio_file()
+                did_any = True
+        # Also sweep any still-queued items by this uploader so their stuff
+        # doesn't pop up later via 次へ / autoplay.
+        dropped = self.queue.remove_by_cid(cid)
+        if dropped or did_any:
+            self._log_local(
+                "MY/STOP",
+                f"{cid[:8]}:{kind} → stopped={did_any}, queue_removed={len(dropped)}")
 
     def _on_delete_item(self, item: QueueItem) -> None:
         self.queue.remove(item.id)

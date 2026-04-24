@@ -33,6 +33,13 @@ from PySide6.QtCore      import QBuffer, QByteArray, QIODevice, QObject, Qt, QTi
 from PySide6.QtMultimedia import (
     QAudio, QAudioFormat, QAudioOutput, QAudioSink, QMediaDevices, QMediaPlayer,
 )
+# QAudio.State has different names on different Qt versions; resolve at
+# import time so the TALK watchdog can tell "stopped because of error"
+# from "stopped normally" on whatever PySide6 build is in use.
+_TALK_STATE_STOPPED = getattr(QAudio.State, "StoppedState", None) \
+                      or getattr(QAudio, "StoppedState", None)
+_TALK_ERROR_NONE    = getattr(QAudio.Error, "NoError", None) \
+                      or getattr(QAudio, "NoError", None)
 
 
 FX_SR   = 44100
@@ -195,6 +202,10 @@ class _TalkStream:
 # =====================================================
 class AudioEngine(QObject):
 
+    # Emitted whenever the owner of an audible slot changes.
+    # args = (kind, owner_cid) where kind = 'audio' (file) or 'talk'.
+    ownershipChanged = Signal(str, str)
+
     def __init__(self) -> None:
         super().__init__()
         self._volume = 0.8
@@ -210,6 +221,10 @@ class AudioEngine(QObject):
         # Keep the sink warm by writing silence whenever the mixer is idle,
         # but only for a short post-speech window (avoids unnecessary work).
         self._last_data_ms: float = 0.0
+        # Rate-limit sink rebuilds so a wedged device doesn't create a
+        # tight reconstruct-loop that hogs the main thread.
+        self._last_sink_rebuild_ms: float = 0.0
+        self._talk_rebuild_count: int = 0
 
         self._build_talk_sink()
 
@@ -224,6 +239,24 @@ class AudioEngine(QObject):
         # fail at boot.
         self._file_player: Optional[QMediaPlayer] = None
         self._file_output: Optional[QAudioOutput] = None
+        self._file_owner: str = ""
+        self._file_url:   Optional[QUrl] = None
+        self._file_start_ms: float = 0.0
+        # Minimum playback duration for uploaded audio files (seconds).
+        # If the file's natural length is shorter, we loop (via setPosition
+        # + play on end-of-media) until this total elapsed time is reached.
+        # 0 = play once, no looping.
+        self._media_min_play_sec: int = 60
+
+        # React to default-device changes (headphones unplugged etc.) by
+        # rebuilding the TALK sink on the new device.  Keep a reference so
+        # the listener isn't garbage-collected while the engine is alive.
+        self._media_devices: Optional[QMediaDevices] = None
+        try:
+            self._media_devices = QMediaDevices(self)
+            self._media_devices.audioOutputsChanged.connect(self._on_devices_changed)
+        except Exception:
+            self._media_devices = None
 
     # ---------- volume ----------
     def set_volume(self, v: int) -> None:
@@ -236,8 +269,8 @@ class AudioEngine(QObject):
             self._file_output.setVolume(self._volume)
 
     # ---------- audio-file playback (uploaded MP3 etc.) ----------
-    # Uploaded audio loops forever; only the operator's 表示削除 button
-    # stops it (matches the persistent-background semantic for images/video).
+    # Uploaded audio plays once, then loops to the min-play duration if
+    # the clip was shorter than that — matches the video behavior.
     def _ensure_file_player(self) -> None:
         if self._file_player is not None:
             return
@@ -245,12 +278,10 @@ class AudioEngine(QObject):
         self._file_output.setVolume(self._volume)
         self._file_player = QMediaPlayer(self)
         self._file_player.setAudioOutput(self._file_output)
-        try:
-            self._file_player.setLoops(QMediaPlayer.Loops.Infinite)
-        except AttributeError:
-            self._file_player.setLoops(-1)
+        self._file_player.setLoops(1)
         self._file_player.errorOccurred.connect(
             lambda err, msg: print(f"[audio-file] error {err}: {msg}"))
+        self._file_player.mediaStatusChanged.connect(self._on_file_status)
 
     def is_audio_file_playing(self) -> bool:
         if self._file_player is None:
@@ -258,19 +289,53 @@ class AudioEngine(QObject):
         return self._file_player.playbackState() == \
                QMediaPlayer.PlaybackState.PlayingState
 
+    def file_owner(self) -> str:
+        return self._file_owner
+
+    @Slot(int)
+    def set_media_min_play_sec(self, sec: int) -> None:
+        self._media_min_play_sec = max(0, int(sec))
+
     @Slot(str)
-    def play_audio_file(self, path: str) -> None:
+    @Slot(str, str)
+    def play_audio_file(self, path: str, owner: str = "") -> None:
         self._ensure_file_player()
         assert self._file_player is not None
         self._file_player.stop()
-        self._file_player.setSource(QUrl.fromLocalFile(path))
+        url = QUrl.fromLocalFile(path)
+        self._file_url = url
+        self._file_start_ms = time.monotonic() * 1000
+        self._file_player.setSource(url)
         self._file_player.play()
+        self._file_owner = owner or ""
+        self.ownershipChanged.emit("audio", self._file_owner)
 
     @Slot()
     def stop_audio_file(self) -> None:
         if self._file_player is not None:
             self._file_player.stop()
             self._file_player.setSource(QUrl())
+        self._file_url = None
+        if self._file_owner:
+            self._file_owner = ""
+            self.ownershipChanged.emit("audio", "")
+
+    def _on_file_status(self, status) -> None:
+        end_val = getattr(QMediaPlayer.MediaStatus, "EndOfMedia", None)
+        if end_val is None or status != end_val:
+            return
+        if self._file_player is None or self._file_url is None:
+            return
+        elapsed_ms = (time.monotonic() * 1000) - self._file_start_ms
+        min_ms = self._media_min_play_sec * 1000
+        if elapsed_ms < min_ms:
+            try:
+                self._file_player.setPosition(0)
+                self._file_player.play()
+                return
+            except Exception:
+                pass
+        self.stop_audio_file()
 
     # ---------- FX ----------
     def _fx_bytes(self, kind: str) -> bytes:
@@ -307,17 +372,85 @@ class AudioEngine(QObject):
 
     # ---------- TALK ----------
     def _build_talk_sink(self) -> None:
-        self._talk_sink = _make_sink(TALK_SR)
-        self._talk_sink.setVolume(self._volume)
-        self._talk_io = self._talk_sink.start()
+        """Build (or rebuild) the TALK output sink.
+
+        Rate-limited: if we were just rebuilt, skip — a tight rebuild loop
+        on a wedged device would lock the main thread and still not
+        recover.  Old sink/io are released cleanly before the new one is
+        created so the audio device doesn't end up held twice.
+        """
+        now_ms = time.monotonic() * 1000
+        if self._talk_sink is not None and now_ms - self._last_sink_rebuild_ms < 200:
+            return
+        if self._talk_sink is not None:
+            try:
+                self._talk_sink.stop()
+            except Exception:
+                pass
+            try:
+                self._talk_sink.deleteLater()
+            except Exception:
+                pass
+            self._talk_sink = None
+            self._talk_io = None
+        try:
+            self._talk_sink = _make_sink(TALK_SR)
+            self._talk_sink.setVolume(self._volume)
+            # Watch for the sink falling into an error/stopped state so the
+            # pump can trigger a rebuild *before* the next write silently
+            # succeeds into a dead sink.
+            try:
+                self._talk_sink.stateChanged.connect(
+                    self._on_talk_state_changed,
+                    Qt.ConnectionType.UniqueConnection)
+            except Exception:
+                # Qt < 6.5 may not accept UniqueConnection here; fall back
+                # to a plain connect (duplicate slots are a no-op anyway
+                # because we only rebuild once per trigger).
+                try:
+                    self._talk_sink.stateChanged.connect(self._on_talk_state_changed)
+                except Exception:
+                    pass
+            self._talk_io = self._talk_sink.start()
+        except Exception as e:
+            print(f"[talk] sink build failed: {e}")
+            self._talk_sink = None
+            self._talk_io = None
+        self._last_sink_rebuild_ms = now_ms
+        self._talk_rebuild_count += 1
+
+    def _on_talk_state_changed(self, state) -> None:
+        # If the sink has stopped with an error (device removed, driver
+        # choked, buffer underrun persisted), rebuild on the next tick.
+        # Don't rebuild inside this callback — Qt doesn't love it.
+        if self._talk_sink is None:
+            return
+        if _TALK_STATE_STOPPED is not None and state == _TALK_STATE_STOPPED:
+            err = None
+            try:
+                err = self._talk_sink.error()
+            except Exception:
+                err = None
+            if err is not None and err != _TALK_ERROR_NONE:
+                # Mark the sink as dead — the next _pump() will notice and rebuild.
+                self._talk_io = None
+
+    def _on_devices_changed(self) -> None:
+        # Default output may have changed (USB headset plugged/unplugged).
+        # Drop the current sink; _pump() will rebuild on the next tick.
+        self._talk_io = None
 
     def play_talk_chunk(self, cid: str, label: str, ip: str,
                         data: bytes, sr: int) -> None:
         """Slot attached to WebBridge.talkChunk. Runs on the Qt main thread."""
         if not data:
             return
-        if sr != TALK_SR and sr > 0:
-            data = _resample_int16le(data, sr, TALK_SR)
+        try:
+            if sr != TALK_SR and sr > 0:
+                data = _resample_int16le(data, sr, TALK_SR)
+        except Exception as e:
+            print(f"[talk] resample failed ({sr}->{TALK_SR}): {e}")
+            return
         # Align to Int16 boundary so later reads don't split a sample.
         if len(data) & 1:
             data = data[:-1]
@@ -334,19 +467,25 @@ class AudioEngine(QObject):
 
     # ---------- mixer pump (runs on Qt main thread, 20 ms tick) ----------
     def _pump(self) -> None:
-        if self._talk_io is None or not self._talk_io.isOpen():
-            self._build_talk_sink()
-            if self._talk_io is None:
-                return
-
         now_ms = time.monotonic() * 1000
+
+        # Sink watchdog — rebuild if it's missing or was flagged dead.
+        if self._talk_io is None or self._talk_sink is None \
+           or not self._talk_io.isOpen():
+            self._build_talk_sink()
+            if self._talk_io is None or self._talk_sink is None:
+                return
 
         # Keep writing while there's room *and* any stream has samples ready.
         # bytesFree() gives us the sink's remaining buffer — writing beyond
         # that can block or get dropped, so we honor it as backpressure.
         safety_writes = 0
         while safety_writes < 8:
-            free = self._talk_sink.bytesFree()
+            try:
+                free = self._talk_sink.bytesFree()
+            except Exception:
+                self._talk_io = None
+                break
             if free < TALK_CHUNK_B:
                 break
 
@@ -355,15 +494,21 @@ class AudioEngine(QObject):
             for i in range(TALK_CHUNK_N):
                 accum[i] = 0
 
-            for stream in self._streams.values():
+            # Snapshot the stream list — play_talk_chunk runs on the same
+            # thread so mutation during iteration is not expected, but
+            # `list(...)` keeps us safe against a future code change.
+            for stream in list(self._streams.values()):
                 if not stream.queue:
                     continue
                 data = stream.take(TALK_CHUNK_N)
                 if not data:
                     continue
                 n = len(data) // 2
-                # Unpack Int16 LE into a Python tuple once per stream.
-                samples = struct.unpack("<%dh" % n, data)
+                try:
+                    samples = struct.unpack("<%dh" % n, data)
+                except struct.error:
+                    # Corrupt chunk — drop it and move on rather than kill the pump.
+                    continue
                 for i, s in enumerate(samples):
                     accum[i] += s
                 any_active = True
@@ -377,9 +522,13 @@ class AudioEngine(QObject):
                     for s in accum
                 ])
                 try:
-                    self._talk_io.write(out.tobytes())
+                    wrote = self._talk_io.write(out.tobytes())
                 except Exception:
-                    self._build_talk_sink()
+                    self._talk_io = None
+                    break
+                if wrote is not None and wrote < 0:
+                    # QIODevice contract: negative means write failed.
+                    self._talk_io = None
                     break
                 self._last_data_ms = now_ms
                 safety_writes += 1
@@ -392,7 +541,7 @@ class AudioEngine(QObject):
                 try:
                     self._talk_io.write(b"\x00" * TALK_CHUNK_B)
                 except Exception:
-                    self._build_talk_sink()
+                    self._talk_io = None
                     break
             break
 

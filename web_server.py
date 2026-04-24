@@ -69,6 +69,10 @@ class WebBridge(QObject):
     marqueeStop      = Signal(str, str, str)
     # (client_id, label, ip, type, absolute path on disk)
     mediaUploaded    = Signal(str, str, str, str, str)
+    # Per-uploader "stop mine" — (client_id, kind).
+    # kind ∈ {'image','video','audio','all'}.  A ControlWindow slot listens
+    # and actually performs the stop if ownership still matches.
+    myStopRequested  = Signal(str, str)
     # pre-formatted log line
     requestLogged    = Signal(str, str)
     # emitted whenever the client registry or any blocked flag changes
@@ -86,6 +90,11 @@ class WebBridge(QObject):
         self._last_talk_log: dict[str, float] = {}
         self._marquee_lanes_used = 0
         self._marquee_lanes_max  = 0
+        # Ownership of the currently playing media slots.  Written by
+        # ControlWindow as display/audio ownership changes; read by HTTP
+        # handlers on the /my/status and /my/stop endpoints.  Empty string
+        # means "nothing of that kind is playing".
+        self._owners: dict[str, str] = {"image": "", "video": "", "audio": ""}
 
     # ---- status / volume / accept ----
     def snapshot(self) -> dict:
@@ -131,6 +140,26 @@ class WebBridge(QObject):
         with self._lock:
             self._marquee_lanes_used = int(used)
             self._marquee_lanes_max = int(maximum)
+
+    # ---- per-client media ownership ----
+    def set_owner(self, kind: str, cid: str) -> None:
+        kind = (kind or "").lower()
+        if kind not in ("image", "video", "audio"):
+            return
+        with self._lock:
+            self._owners[kind] = cid or ""
+
+    def owner_of(self, kind: str) -> str:
+        kind = (kind or "").lower()
+        with self._lock:
+            return self._owners.get(kind, "")
+
+    def my_active_kinds(self, cid: str) -> dict[str, bool]:
+        """Which media slots are currently held by `cid`."""
+        if not cid:
+            return {"image": False, "video": False, "audio": False}
+        with self._lock:
+            return {k: (v == cid) for k, v in self._owners.items()}
 
     # ---- client registry ----
     def touch_client(self, client_id: str, name: str, ip: str) -> tuple[bool, str]:
@@ -365,13 +394,15 @@ class _Handler(BaseHTTPRequestHandler):
             self.bridge.touch_client(cid, name, ip)
             snap = self.bridge.snapshot()
             allowed, _ = self.bridge.is_allowed(cid)
+            mine = self.bridge.my_active_kinds(cid)
             self._send_json(200, {
                 "accept":  snap["accept"],
                 "volume":  snap["volume"],
                 "clients": snap["clients"],
                 "marquee": {"used": snap["marquee_used"],
                             "max":  snap["marquee_max"]},
-                "me": {"id": cid, "name": name, "allowed": allowed},
+                "me":   {"id": cid, "name": name, "allowed": allowed},
+                "mine": mine,
             }, set_cookie=new_cookie)
             return
         self._send_json(404, {"ok": False, "reason": "not_found"})
@@ -521,6 +552,33 @@ class _Handler(BaseHTTPRequestHandler):
             self.bridge.marqueeStop.emit(cid, label, ip)
             self.bridge.emit_log("MARQUEE/STOP", f"{now_hms}  {label:24s}  MARQUEE   STOP")
             self._send_json(200, {"ok": True}, set_cookie=new_cookie)
+            return
+
+        if path == "/my/stop":
+            # Stop / cancel uploads owned by *this* client only.  Other
+            # clients may not affect items they did not upload.  Accepts
+            # ?kind=image|video|audio|all; default = all.
+            cid, label, ip, new_cookie = self._who()
+            kind = (query.get("kind", ["all"])[0] or "all").lower()
+            if kind not in ("image", "video", "audio", "all"):
+                self._send_json(400, {"ok": False, "reason": "bad_kind"},
+                                set_cookie=new_cookie)
+                return
+            # Verify at least one matching slot is owned by this client.
+            mine = self.bridge.my_active_kinds(cid)
+            if kind == "all":
+                stopped = [k for k, v in mine.items() if v]
+            else:
+                stopped = [kind] if mine.get(kind) else []
+            # Always forward to the main thread so the queue is swept too
+            # (pending items uploaded by this client get removed), even if
+            # none are currently playing.
+            self.bridge.myStopRequested.emit(cid, kind)
+            self.bridge.emit_log(
+                "MY/STOP",
+                f"{now_hms}  {label:24s}  MY/STOP   kind={kind}  stopped={','.join(stopped) or '-'}")
+            self._send_json(200, {"ok": True, "stopped": stopped},
+                            set_cookie=new_cookie)
             return
 
         if path == "/upload":
