@@ -199,7 +199,8 @@ def main() -> int:
     upload_dir = os.path.join(here, "cache", "uploads")
     os.makedirs(upload_dir, exist_ok=True)
     try:
-        srv, srv_thread = run_in_thread(host, port, bridge, upload_dir)
+        srv, srv_thread = run_in_thread(
+            host, port, bridge, upload_dir, active_paths_cb=media_queue.protected_paths)
     except OSError as exc:
         QMessageBox.critical(
             None, "POCOBoard — HTTP server failed",
@@ -219,6 +220,10 @@ def main() -> int:
     rc = app.exec()
     try:
         srv.shutdown()
+    except Exception:
+        pass
+    try:
+        srv.server_close()
     except Exception:
         pass
     return rc

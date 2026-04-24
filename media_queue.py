@@ -117,6 +117,15 @@ class MediaQueue(QObject):
     def count(self) -> int:
         return len(self._items)
 
+    def protected_paths(self) -> set[str]:
+        """Files that must not be pruned from the upload cache yet."""
+        out = {it.path for it in self._items}
+        if self._playing_visual is not None:
+            out.add(self._playing_visual.path)
+        if self._playing_audio is not None:
+            out.add(self._playing_audio.path)
+        return out
+
     # ---------- mutations ----------
     def remove(self, item_id: str) -> Optional[QueueItem]:
         """Drop a queued item (and delete its file — it was never played)."""
@@ -160,8 +169,22 @@ class MediaQueue(QObject):
             self._playing_audio = item
         self.changed.emit()
 
-    def stop_all(self) -> None:
-        """Clear both playing slots — called from the 停止 button."""
+    def clear_playing_visual(self) -> None:
+        if self._playing_visual is None:
+            return
         self._playing_visual = None
+        self.changed.emit()
+
+    def clear_playing_audio(self) -> None:
+        if self._playing_audio is None:
+            return
         self._playing_audio = None
         self.changed.emit()
+
+    def stop_all(self) -> None:
+        """Clear both playing slots — called from the 停止 button."""
+        changed = self._playing_visual is not None or self._playing_audio is not None
+        self._playing_visual = None
+        self._playing_audio = None
+        if changed:
+            self.changed.emit()

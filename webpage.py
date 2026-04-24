@@ -365,7 +365,7 @@ document.getElementById('btnSnow').onclick   = () => { flashScreen('#ddeeff'); t
 
 // ============ TALK: mic capture → POST /talk every ~500ms ============
 const TALK_TARGET_SR = 16000;
-const TALK_CHUNK_MS  = 500;
+const TALK_CHUNK_MS  = 200;
 let talkActive = false;
 let talkCtx = null, talkStream = null, talkProc = null, talkSrc = null;
 let talkFrames = [];
@@ -421,6 +421,7 @@ function drainAndSend() {
     talkFrames = [];
     talkStats.errors++;
     talkStats.lastErr = 'backpressure';
+    talkConsecErrors++;
     renderTalkStatus();
     return;
   }
@@ -474,7 +475,7 @@ function drainAndSend() {
       talkConsecErrors = 0;
     } else {
       talkStats.errors++;
-      talkStats.lastErr = 'HTTP ' + r.status;
+      talkStats.lastErr = (r.status === 429) ? 'server busy' : ('HTTP ' + r.status);
       talkConsecErrors++;
     }
     renderTalkStatus();
