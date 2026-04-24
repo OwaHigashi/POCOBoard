@@ -19,17 +19,19 @@ upload: blocked clients get 403 `blocked`.  Separate global `accept=false`
 returns 503 `disabled`.
 """
 from __future__ import annotations
+from collections import deque
 import json
 import os
 import re
 import secrets
+import socket
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing      import Optional
 from urllib.parse import urlparse, parse_qs, unquote
 
-from PySide6.QtCore import QObject, Signal
+from PySide6.QtCore import QObject, QTimer, Signal
 
 from webpage import INDEX_HTML
 
@@ -48,6 +50,9 @@ _SAFE_EXT = {
 }
 
 _SANITIZE_NAME = re.compile(r"[^A-Za-z0-9._-]+")
+_TALK_QUEUE_MAX_ITEMS = 128
+_TALK_QUEUE_MAX_BYTES = 2 * 1024 * 1024
+_HTTP_REQUEST_TIMEOUT_SEC = 5.0
 
 
 def _sanitize_filename(name: str, kind: str) -> str:
@@ -90,11 +95,20 @@ class WebBridge(QObject):
         self._last_talk_log: dict[str, float] = {}
         self._marquee_lanes_used = 0
         self._marquee_lanes_max  = 0
+        self._talk_queue = deque()
+        self._talk_queue_bytes = 0
         # Ownership of the currently playing media slots.  Written by
         # ControlWindow as display/audio ownership changes; read by HTTP
         # handlers on the /my/status and /my/stop endpoints.  Empty string
         # means "nothing of that kind is playing".
         self._owners: dict[str, str] = {"image": "", "video": "", "audio": ""}
+
+        # Drain HTTP-originated TALK chunks on the Qt thread with a bounded
+        # in-process queue so worker threads cannot flood queued Qt signals.
+        self._talk_timer = QTimer(self)
+        self._talk_timer.setInterval(10)
+        self._talk_timer.timeout.connect(self._drain_talk_queue)
+        self._talk_timer.start()
 
     # ---- status / volume / accept ----
     def snapshot(self) -> dict:
@@ -251,6 +265,29 @@ class WebBridge(QObject):
     def emit_log(self, kind: str, line: str) -> None:
         self.requestLogged.emit(kind, line)
 
+    def submit_talk_chunk(self, cid: str, label: str, ip: str,
+                          data: bytes, sr: int) -> bool:
+        size = len(data)
+        if size <= 0:
+            return False
+        with self._lock:
+            if (len(self._talk_queue) >= _TALK_QUEUE_MAX_ITEMS or
+                    self._talk_queue_bytes + size > _TALK_QUEUE_MAX_BYTES):
+                return False
+            self._talk_queue.append((cid, label, ip, data, sr))
+            self._talk_queue_bytes += size
+        return True
+
+    def _drain_talk_queue(self) -> None:
+        batch = []
+        with self._lock:
+            while self._talk_queue and len(batch) < 12:
+                item = self._talk_queue.popleft()
+                self._talk_queue_bytes -= len(item[3])
+                batch.append(item)
+        for cid, label, ip, data, sr in batch:
+            self.talkChunk.emit(cid, label, ip, data, sr)
+
 
 # =====================================================
 #  Handler
@@ -258,6 +295,14 @@ class WebBridge(QObject):
 class _Handler(BaseHTTPRequestHandler):
     bridge:       WebBridge = None   # type: ignore[assignment]
     upload_dir:   str       = ""
+    active_paths_cb = None
+
+    def setup(self) -> None:
+        super().setup()
+        try:
+            self.connection.settimeout(_HTTP_REQUEST_TIMEOUT_SEC)
+        except Exception:
+            pass
 
     def log_message(self, fmt: str, *args: object) -> None:
         return
@@ -305,7 +350,10 @@ class _Handler(BaseHTTPRequestHandler):
         if set_cookie:
             self._set_identity_cookie(set_cookie)
         self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError, socket.timeout, OSError):
+            pass
 
     def _read_body(self, max_bytes: int) -> bytes:
         # Reverse proxies sometimes switch a POST to Transfer-Encoding:
@@ -316,7 +364,10 @@ class _Handler(BaseHTTPRequestHandler):
         if "chunked" in te:
             out = bytearray()
             while True:
-                size_line = self.rfile.readline().strip()
+                try:
+                    size_line = self.rfile.readline().strip()
+                except (socket.timeout, OSError):
+                    return b""
                 if not size_line:
                     break
                 try:
@@ -325,13 +376,21 @@ class _Handler(BaseHTTPRequestHandler):
                     break
                 if size == 0:
                     # discard trailers
-                    while self.rfile.readline().strip():
-                        pass
+                    while True:
+                        try:
+                            trailer = self.rfile.readline().strip()
+                        except (socket.timeout, OSError):
+                            return b""
+                        if not trailer:
+                            break
                     break
                 if len(out) + size > max_bytes:
                     return b""
-                out.extend(self.rfile.read(size))
-                self.rfile.read(2)   # CRLF after chunk
+                try:
+                    out.extend(self.rfile.read(size))
+                    self.rfile.read(2)   # CRLF after chunk
+                except (socket.timeout, OSError):
+                    return b""
             return bytes(out)
         try:
             n = int(self.headers.get("Content-Length", "0"))
@@ -339,7 +398,10 @@ class _Handler(BaseHTTPRequestHandler):
             n = 0
         if n <= 0 or n > max_bytes:
             return b""
-        return self.rfile.read(n)
+        try:
+            return self.rfile.read(n)
+        except (socket.timeout, OSError):
+            return b""
 
     def _read_body_streamed(self, dest_path: str, max_bytes: int) -> int:
         """Stream the request body straight to disk — used for uploads so
@@ -356,7 +418,10 @@ class _Handler(BaseHTTPRequestHandler):
         written = 0
         with open(dest_path, "wb") as f:
             while remaining > 0:
-                chunk = self.rfile.read(min(64 * 1024, remaining))
+                try:
+                    chunk = self.rfile.read(min(64 * 1024, remaining))
+                except (socket.timeout, OSError):
+                    return -1
                 if not chunk:
                     break
                 f.write(chunk)
@@ -506,7 +571,13 @@ class _Handler(BaseHTTPRequestHandler):
                 sr = 16000
             if sr < 8000 or sr > 48000:
                 sr = 16000
-            self.bridge.talkChunk.emit(cid, label, ip, data, sr)
+            if not self.bridge.submit_talk_chunk(cid, label, ip, data, sr):
+                self.bridge.emit_log(
+                    "TALK",
+                    f"{now_hms}  {label:24s}  TALK      X busy (server queue full)")
+                self._send_json(429, {"ok": False, "reason": "busy"},
+                                set_cookie=new_cookie)
+                return
             if self.bridge.should_log_talk(cid):
                 secs = len(data) // 2 / sr
                 self.bridge.emit_log(
@@ -623,34 +694,49 @@ class _Handler(BaseHTTPRequestHandler):
     # Keep at most ~50 files in the upload cache so long sessions don't
     # quietly fill the disk.
     def _prune_old_uploads(self, max_files: int = 50) -> None:
+        protected = set()
+        try:
+            if callable(self.active_paths_cb):
+                protected = {os.path.abspath(p) for p in self.active_paths_cb() or []}
+        except Exception:
+            protected = set()
         try:
             entries = [
-                (os.path.getmtime(os.path.join(self.upload_dir, n)), n)
+                (os.path.getmtime(os.path.join(self.upload_dir, n)),
+                 os.path.abspath(os.path.join(self.upload_dir, n)),
+                 n)
                 for n in os.listdir(self.upload_dir)
                 if os.path.isfile(os.path.join(self.upload_dir, n))
             ]
         except OSError:
             return
-        if len(entries) <= max_files:
+        prunable = [entry for entry in entries if entry[1] not in protected]
+        if len(prunable) <= max_files:
             return
-        entries.sort()   # oldest first
-        for _, name in entries[:-max_files]:
+        prunable.sort()   # oldest first
+        for _, path, name in prunable[:-max_files]:
             try:
-                os.remove(os.path.join(self.upload_dir, name))
+                os.remove(path)
             except OSError:
                 pass
 
 
 def build_server(host: str, port: int, bridge: WebBridge,
-                 upload_dir: str) -> ThreadingHTTPServer:
+                 upload_dir: str, active_paths_cb=None) -> ThreadingHTTPServer:
     handler_cls = type("_BoundHandler", (_Handler,),
-                       {"bridge": bridge, "upload_dir": upload_dir})
-    return ThreadingHTTPServer((host, port), handler_cls)
+                       {"bridge": bridge, "upload_dir": upload_dir,
+                        "active_paths_cb": staticmethod(active_paths_cb) if active_paths_cb else None})
+    server_cls = type(
+        "_PocoThreadingHTTPServer",
+        (ThreadingHTTPServer,),
+        {"request_queue_size": 128, "allow_reuse_address": True},
+    )
+    return server_cls((host, port), handler_cls)
 
 
 def run_in_thread(host: str, port: int, bridge: WebBridge,
-                  upload_dir: str) -> tuple[ThreadingHTTPServer, threading.Thread]:
-    srv = build_server(host, port, bridge, upload_dir)
+                  upload_dir: str, active_paths_cb=None) -> tuple[ThreadingHTTPServer, threading.Thread]:
+    srv = build_server(host, port, bridge, upload_dir, active_paths_cb=active_paths_cb)
     th = threading.Thread(target=srv.serve_forever, name="pocoboard-http", daemon=True)
     th.start()
     return srv, th

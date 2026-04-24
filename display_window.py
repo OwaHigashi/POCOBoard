@@ -36,6 +36,7 @@ class DisplayWindow(QWidget):
     # kind ∈ {'image', 'video'}.  Lets WebBridge know who is allowed to
     # stop the current background from the browser-side "自分のを取消" button.
     ownershipChanged = Signal(str, str)
+    visualPlaybackStopped = Signal()
 
     def __init__(self, marquee_font: QFont, status_text_cb=None) -> None:
         super().__init__()
@@ -196,6 +197,18 @@ class DisplayWindow(QWidget):
         """
         self._media_min_play_sec = max(0, int(sec))
 
+    def _clear_image_internal(self) -> bool:
+        had_image = self._bg_image is not None
+        self._image_timer.stop()
+        self._bg_image = None
+        self._bg_caption = ""
+        if self._bg_image_owner:
+            self._bg_image_owner = ""
+            self.ownershipChanged.emit("image", "")
+        if had_image:
+            self.visualPlaybackStopped.emit()
+        return had_image
+
     # ---------- video overlay ----------
     def _ensure_video_widgets(self) -> None:
         if self._video_widget is not None:
@@ -213,8 +226,7 @@ class DisplayWindow(QWidget):
         # hasn't elapsed.  That way the loop count auto-matches each clip's
         # natural length (short clips loop, long clips play once).
         self._video_player.setLoops(1)
-        self._video_player.errorOccurred.connect(
-            lambda err, msg: print(f"[video] error {err}: {msg}"))
+        self._video_player.errorOccurred.connect(self._on_video_error)
         self._video_player.mediaStatusChanged.connect(self._on_video_status)
 
     @Slot(str)
@@ -250,25 +262,12 @@ class DisplayWindow(QWidget):
         Leaves FX / marquee / video alone — those have their own lifecycles.
         No-op if the image has already been replaced or cleared.
         """
-        if self._bg_image is None:
-            return
-        self._bg_image = None
-        self._bg_caption = ""
-        if self._bg_image_owner:
-            self._bg_image_owner = ""
-            self.ownershipChanged.emit("image", "")
+        self._clear_image_internal()
 
     @Slot()
     def clear_image_bg(self) -> None:
         """Drop just the image background (per-user 取消 from the browser)."""
-        if self._bg_image is None:
-            return
-        self._image_timer.stop()
-        self._bg_image = None
-        self._bg_caption = ""
-        if self._bg_image_owner:
-            self._bg_image_owner = ""
-            self.ownershipChanged.emit("image", "")
+        self._clear_image_internal()
 
     @Slot(str)
     @Slot(str, str)
@@ -281,13 +280,7 @@ class DisplayWindow(QWidget):
         # Clear any image background (and cancel its auto-clear timer); FX
         # can still run as a transient overlay because it paints the whole
         # window each frame.
-        self._image_timer.stop()
-        if self._bg_image is not None:
-            self._bg_image = None
-            self._bg_caption = ""
-            if self._bg_image_owner:
-                self._bg_image_owner = ""
-                self.ownershipChanged.emit("image", "")
+        self._clear_image_internal()
         self._video_widget.setGeometry(0, 0, self.width(), self.height())
         self._video_widget.lower()
         self._video_widget.show()
@@ -302,6 +295,7 @@ class DisplayWindow(QWidget):
         self._mark_activity()
 
     def _stop_video_internal(self) -> None:
+        had_video = self._video_active or self._video_url is not None
         if self._video_player is not None:
             self._video_player.stop()
             self._video_player.setSource(QUrl())
@@ -312,6 +306,8 @@ class DisplayWindow(QWidget):
         if self._video_owner:
             self._video_owner = ""
             self.ownershipChanged.emit("video", "")
+        if had_video:
+            self.visualPlaybackStopped.emit()
 
     def _on_video_status(self, status) -> None:
         # On EndOfMedia, decide whether to loop (min-play-sec not yet met)
@@ -335,6 +331,10 @@ class DisplayWindow(QWidget):
                 pass
         self._stop_video_internal()
 
+    def _on_video_error(self, err, msg) -> None:
+        print(f"[video] error {err}: {msg}")
+        self._stop_video_internal()
+
     @Slot()
     def stop_video(self) -> None:
         self._stop_video_internal()
@@ -349,13 +349,7 @@ class DisplayWindow(QWidget):
         long scrolling announcement.
         """
         self._stop_video_internal()
-        self._image_timer.stop()
-        if self._bg_image is not None:
-            self._bg_image = None
-            self._bg_caption = ""
-            if self._bg_image_owner:
-                self._bg_image_owner = ""
-                self.ownershipChanged.emit("image", "")
+        self._clear_image_internal()
         self._scene = None
         # Bring us back to the black idle state (not the title) — the
         # operator explicitly asked for "quiet black" after clearing.

@@ -2,278 +2,316 @@
 
 <img src="icon.png" width="128" align="right" alt="POCOBoard icon">
 
-配信中の「画面演出サイドキック」として動く **Windows ネイティブ** のデスクトップアプリです。
+POCOBoard は、LAN 内のスマホや PC のブラウザから、配信中 PC の表示と音を即座に操作するための Windows 向けデスクトップアプリです。  
+[M5Tab-Poco](https://github.com/OwaHigashi/M5Tab-Poco) の Windows 移植として、PySide6 / Qt 6 で実装しています。
 
-[M5Tab-Poco](https://github.com/OwaHigashi/M5Tab-Poco) の Windows 版移植
+配信 PC 上では次の 2 つのウィンドウが動作します。
 
-操作ウィンドウと表示ウィンドウを**別モニタ**に配置するマルチスクリーン構成で、同じ LAN 内にいる視聴者のブラウザから複数人が同時に BOMB / CHEER / HEARTS / STARS / SNOW といった演出を投げ込んだり、画像・動画・MP3 を投稿したり、マイクで喋りかけたりできます。
+- `Control`:
+  オペレーター用。キュー確認、再生、停止、ユーザー管理、ログ確認を行います。
+- `Display`:
+  視聴者に見せる側。FX、画像、動画、スクロールコメントを表示します。
 
-PySide6 / Qt 6 製。PyInstaller で 1 フォルダに固めれば、配布先 PC に Python を入れなくても exe をダブルクリックで起動します。
-
----
-
-## 🎛 主な機能
-
-- **2 画面運用** — 操作ウィンドウ（固定サイズ）と表示ウィンドウ（全画面/最大化）を別モニタへ自動配置
-- **ブラウザ経由のリモート操作** — 同一 LAN のスマホ/PC の任意ブラウザから複数人が同時接続
-- **5 種の GPU 加速パーティクル演出** — BOMB / CHEER / HEARTS / STARS / SNOW（60 fps、解像度非依存）
-- **ニコニコ風横スクロール** — 上限なし、重なり許可、`<ue>` / `<shita>` で上下固定も可
-- **メディア投稿** — 画像 / 動画 / MP3 をアップロード → 制御側のキューで順次承認再生
-- **背景として保持** — 画像・動画・音声は「⛔ 停止」ボタンを押すまで出し続ける（動画・音声は無限ループ）
-- **TALK（マルチ発話ミキサー）** — ブラウザのマイクを PC スピーカへ。**同時発話はサンプル単位で加算ミックス**
-- **ユーザー識別＋ブロック** — Cookie で各ブラウザを一意 ID 化、個別 / 一括で許可・拒否
-- **リクエストログ** — 「誰が・何を」色分けで流れる表示
-- **動画 / 音声対応形式** — `.mp4 / .mkv / .mov / .avi / .webm / .m4v / .wmv / .mp3 / .wav / .m4a / .aac / .ogg / .flac`
+ブラウザ側からは、FX、TALK、スクロール、画像・動画・音声アップロードを行えます。アップロードされたメディアは即再生ではなくキューに入り、オペレーターが流すか、自動再生に任せるかを選べます。
 
 ---
 
-## 📸 スクリーンショット
+## 主な機能
 
-| キュー（主操作） | ユーザー管理 |
+- 2 画面構成
+  `Control` と `Display` を別モニタに配置できます。
+- ブラウザ操作
+  同一 LAN のスマホや PC から操作できます。
+- GPU ベースの FX
+  `BOMB / CHEER / HEARTS / STARS / SNOW`
+- TALK 音声ミックス
+  複数ブラウザの音声を同時にミックスして PC スピーカへ出します。
+- メディアキュー
+  画像・動画・音声はキューに入り、`再生 / 次へ / 全削除 / 停止 / 自動再生ON-OFF` で運用できます。
+- ユーザー単位の許可・拒否
+  クライアントごとに `許可中 / 拒否中` を切り替えられます。
+- スクロールコメント
+  色、サイズ、固定位置タグに対応しています。
+- ローカル操作
+  オペレーターがローカルファイルを直接再生できます。
+- リクエストログ
+  誰が何を送ったかを色付きで確認できます。
+
+---
+
+## スクリーンショット
+
+| キュー / 再生制御 | ユーザー管理 |
 |---|---|
 | <img src="docs/img/control_queue.png" width="400"> | <img src="docs/img/control_users.png" width="400"> |
 
-| 横スクロール作成 | リクエストログ |
+| スクロール編集 | リクエストログ |
 |---|---|
 | <img src="docs/img/control_marquee.png" width="400"> | <img src="docs/img/control_log.png" width="400"> |
 
 ---
 
-## 🖥 動作要件
+## 必要環境
 
-- Windows 10 / 11 (64-bit)
-- ディスプレイ 1 枚でも動きます（2 枚以上推奨）
-- スピーカー（内蔵でも外付けでも可）
-- Wi-Fi または有線 LAN — 配信 PC とスマホ / 他 PC が同じネットワークにいること
-- 視聴者ブラウザ: Edge / Chrome / Firefox / Safari 16+
+- Windows 10 / 11 64-bit
+- 配信 PC 1 台
+- LAN 接続されたスマホまたは PC
+- 対応ブラウザ
+  Edge / Chrome / Firefox / Safari 16+
 
-**exe 版** を使うだけなら Python のインストールは **不要** です。
+`exe` を使う場合、Python は不要です。
 
 ---
 
-## ⚡ インストール
+## インストール
 
-### A. exe 版（一番かんたん・配布推奨）
+### 1. `exe` を使う
 
-1. リリース ZIP を展開 — 例: `C:\POCOBoard\`
-2. `POCOBoard.exe` をダブルクリック
-3. 初回に SmartScreen が出たら「詳細情報」→「実行」
-4. （任意）同じフォルダに `config.example.ini` を `config.ini` としてコピー、お好みで編集
+1. リリース ZIP を展開します。
+2. `POCOBoard.exe` を起動します。
+3. 初回は `config.example.ini` を `config.ini` にコピーして必要な値を調整します。
 
+例:
+
+```text
+POCOBoard/
+  POCOBoard.exe
+  config.ini
+  config.example.ini
+  _internal/
 ```
-POCOBoard\
-  POCOBoard.exe        ← これをダブルクリック
-  config.example.ini   ← 必要ならコピーして config.ini に
-  _internal\           ← Qt DLL など（触らないでOK）
-```
 
-### B. ソース版（改造・開発用）
+### 2. ソースから実行する
 
 ```bat
 git clone git@github.com:OwaHigashi/POCOBoard.git
 cd POCOBoard
-install-deps.bat     :: PySide6 などを pip で導入
-run.bat              :: 起動
+install-deps.bat
+run.bat
 ```
 
-必要: [Python 3.10+](https://www.python.org/downloads/)（インストーラで **Add python.exe to PATH** にチェック）
+Python 3.10 以上を想定しています。
 
 ---
 
-## 🚀 初回起動
+## 起動
 
-`POCOBoard.exe` を実行すると **2 つのウィンドウ** が開きます。
+起動すると `Control` と `Display` の 2 ウィンドウが開きます。
 
-| ウィンドウ | 役割 | サイズ |
-|---|---|---|
-| **Control** | オペレータ（配信者）が使う固定サイズのパネル | 820 × 880 |
-| **Display** | 視聴者に見せる大画面（FX / 横スクロール / 背景） | 全画面 or 最大化可 |
+- `Control`:
+  オペレーターの手元で使います。
+- `Display`:
+  見せたいモニタへ移動して全画面化します。
 
-モニタが 2 枚あると Display は **Control の反対側** に自動配置されます。
+`Control` 上部に表示される URL をブラウザで開くと、リモート UI を利用できます。
 
-起動したら、操作ウィンドウ上部に出ている **リモート URL**（例 `http://192.168.1.23:8080/`）を、スマホ / 他 PC のブラウザで開いてください。
+例:
 
----
-
-## 🎮 使い方
-
-### 制御ウィンドウ（オペレータ）
-
-常時表示のヘッダ + 下部タブ構造:
-
-**ヘッダ（常時表示）**
-- タイトル + `ACCEPT / REJECT` トグル — 受付全体のスイッチ
-- ステータス — リモート URL、メッセージ流数、接続中クライアント数
-- **エフェクト 6 ボタン** — BOMB / CHEER / HEARTS / STARS / SNOW / MARQUEE STOP
-- **音量スライダ** — 0〜100（FX / TALK / BGM 共通）
-
-**タブ**
-- 📥 **キュー** — アップロード待機リスト＋「⛔ 停止」
-- 📢 **横スクロール** — メッセージ作成・タグボタン・速度選択・流す / 停止
-- 🖥 **表示** — 出力スクリーン選択・F11 フル化・ローカルファイル再生
-- 👥 **ユーザー** — 接続中クライアント一覧＋個別許可/拒否＋一括許可/拒否
-- 📜 **ログ** — 「誰が何をしたか」色分けリクエストログ
-
-### ブラウザ（リモート側）
-
-URL を開くと次のUIが出ます:
-
-- 左上の **表示名入力欄** — ログに表示されます（Cookie に保存、次回も復元）
-- **BOMB / CHEER / TALK / HEARTS / STARS / SNOW** の 6 ボタン
-- **📷 写真 / 🎬 動画 / 🎵 音声** アップロード（各 25/200/50 MB まで）
-- **📢 横スクロール** コンポーザ（タグボタン・速度 x1〜x5）
-- 右上の **受付:ON/OFF** / **音量** 現在値
-
-> **TALK について**: ブラウザの仕様上 **HTTPS または `localhost` 経由**でないとマイクが開けません。LAN 上で `http://` のままだと、一部ブラウザでマイク許可が降りません。
-
-### 表示ウィンドウのレイヤ構造
-
-Display は下から順に 4 層で描画されます:
-
-|Display|
-|:--|
-|4) 横スクロール（最前面・常に読める）|
-|3) FX (BOMB / CHEER / 等 — 一時エフェクト) |
-|2) 背景: 画像 or 動画（停止まで残る／動画は無限ループ）|
-|1) ベース: 黒 or タイトル画面|
-
-- **タイトル画面** — 起動直後と **5 分間リクエストが無い** ときに表示
-- **背景** — 画像 / 動画（ループ）/ 音声（ループ）は **「⛔ 停止」を押すまで残る**
-- **FX** — 数秒で終わる。背景の上に重ねて表示（動画背景上では 75 % 透過）
-- **横スクロール** — 常に最前面、FX 中でも読める
-
-### キュー管理（📥 キュータブ）
-
-**ブラウザから送られたメディアは自動再生されず、キューに積まれる** だけです。オペレータが順に捌きます。
-
-|📥 キュー |
-|:--|
-| [⛔ 停止 (背景・動画・音声を止める)]  [キュー全削除] |
-| 再生中: 🎬 live_cam.mp4  (Iris (#01abcd99))  |
-| 📷 IMG  party_photo.jpg (2.3MB)  Alice [▶再生][🗑] |
-| 🎬 VID  opening.mp4 (17.4MB)     Bob   [▶再生][🗑] |
-| 🎵 MP3  jingle.mp3 (3.0MB)       Dan   [▶再生][🗑] |
-| … |
-
-- **`[▶ 再生]`** — そのアイテムを今すぐ表示/再生し、キューから外す
-- **`[🗑 削除]`** — 再生せずに破棄（ファイルも削除）
-- **`[⛔ 停止]`** — 現在再生中の背景画像・動画・音声を止める
-- **`[キュー全削除]`** — 待機中すべてを一括破棄
-- 画像と動画は同じ「視覚スロット」なので片方ずつ。音声は別スロットで同時再生 OK。
-
-### ユーザー管理（👥 ユーザータブ）
-
-接続中のブラウザがリアルタイムで一覧に載ります（Cookie ベースの一意 ID）。
-
-- 各行: LED（30 秒以内アクティブ=緑） / 名前(#ID8桁) / プッシュスイッチ式許可/拒否
-- 上部: **`全員を許可`** / **`全員を拒否`** / **`更新`**
-- 拒否されたクライアントの FX / TALK / marquee / upload はすべて **403 blocked** で返されログに残る
-- 一覧はスクロール可 — 10 人、20 人でも問題なし
+```text
+http://192.168.1.23:8080/
+```
 
 ---
 
-## 📝 横スクロールのタグ（ニコニコ風）
+## Control ウィンドウ
 
-**位置（先頭に置く・閉じタグ不要）**
+### 上部エリア
+
+- `ACCEPT / REJECT`
+  グローバルに受付を切り替えます。
+- ステータス
+  リモート URL、メッセージ数、接続クライアント数を表示します。
+- FX ボタン
+  `BOMB / CHEER / HEARTS / STARS / SNOW / MARQUEE STOP`
+- 音量スライダ
+  TALK、効果音、ローカル音声ファイル再生に適用されます。
+
+### キュータブ
+
+キューは POCOBoard の運用の中心です。
+
+- `停止`
+  背景画像、背景動画、音声ファイル再生を止めます。
+- `次へ`
+  先頭のキュー項目を再生します。
+- `自動再生 ON / OFF`
+  アップロード到着時に即再生するか、キュー待ちにするかを切り替えます。
+- `全削除`
+  未再生のキュー項目だけを削除します。
+- `再生中`
+  現在流れている visual / audio を表示します。
+- `待機中のメディア`
+  各行に `再生 / 削除` があります。
+
+補足:
+
+- 画像と動画は同じ visual スロットを共有します。
+- 音声ファイルは別スロットで流れます。
+- 再生中またはキュー待ちのファイルは、自動 prune から保護されます。
+
+### 横スクロールタブ
+
+- コメント入力
+- 色タグ、サイズタグ、固定位置タグの挿入
+- 速度 `x1..x5`
+- `流す / 停止`
+
+### 表示タブ
+
+- `Display` を出すモニタの選択
+- 全画面切替
+- ローカル画像 / 動画 / 音声ファイルの再生
+- 画像表示秒数の調整
+
+### ユーザータブ
+
+- クライアント一覧
+- 個別の `許可 / 拒否`
+- `全員を許可 / 全員を拒否`
+- 手動更新
+
+### ログタブ
+
+- `JOIN / NAME / TALK / UPLOAD / ADMIN` などを色付き表示
+- ログ消去
+
+---
+
+## ブラウザ UI
+
+ブラウザから使える主な機能は次の通りです。
+
+- 表示名設定
+- `BOMB / CHEER / HEARTS / STARS / SNOW`
+- `TALK`
+- 画像 / 動画 / 音声アップロード
+- 横スクロール送信
+- 自分が流している画像 / 動画 / 音声だけを止める `自分のを止める`
+
+### TALK について
+
+ブラウザのマイク利用には Secure Context が必要です。通常の LAN 上の `http://<IP>:<port>/` では、ブラウザによっては TALK が使えません。必要に応じて `localhost` や HTTPS で確認してください。
+
+サーバ負荷が高い場合、TALK は `429 busy` を返して過負荷を明示的に落とします。無制限にキューを積み続けない実装です。
+
+---
+
+## スクロールタグ
+
+### 位置
 
 | タグ | 意味 |
 |---|---|
-| `<ue>` / `<top>` | 上部中央に 3 秒固定 |
-| `<shita>` / `<bottom>` | 下部中央に 3 秒固定 |
-| `<naka>` / `<middle>` | 横スクロール（デフォルト） |
+| `<ue>` / `<top>` | 上部固定 |
+| `<shita>` / `<bottom>` | 下部固定 |
+| `<naka>` / `<middle>` | 横スクロール |
 
-**色（`</>` または `</color>` で閉じる）**
+### 色
 
-- 短縮: `<r> <g> <b> <y> <c> <m> <w> <o>`
-- 長名: `<red> <green> <blue> <yellow> <cyan> <purple> <white> <orange> <pink>`
+- 短縮タグ:
+  `<r> <g> <b> <y> <c> <m> <w> <o>`
+- 長いタグ:
+  `<red> <green> <blue> <yellow> <cyan> <purple> <white> <orange> <pink>`
 
-**サイズ / 装飾**
+### サイズ / 装飾
 
-- `<small>` / `<s1>` — 小
-- `<normal>` / `<s2>` — 中（デフォルト）
-- `<big>` / `<s3>` — 大
-- `<u>...</u>` — 下線
-- `<hl>...</hl>` / `<mark>...</mark>` — ハイライト
+- `<small>` / `<s1>`
+- `<normal>` / `<s2>`
+- `<big>` / `<s3>`
+- `<u>...</u>`
+- `<hl>...</hl>` / `<mark>...</mark>`
 
-**例**
+例:
 
-```
-<ue><big><y>19時開始！</y></big>
-<r>重要</> <big>サプライズ準備</big> <u>集合してください</u>
-<shita><pink>ありがとう〜</pink>
+```text
+<ue><big><y>19時から開始</y></big>
+<r>お知らせ</r> <u>音量に注意</u>
+<shita><pink>ありがとうございました</pink>
 ```
 
 ---
 
-## 🔌 HTTP API
+## HTTP API
 
-すべてのエンドポイントは `http://<IP>:<port>/` からの相対。  
-`poco_client` Cookie で発信元識別、`X-Poco-Name` ヘッダで表示名指定。
+ベース URL:
+
+```text
+http://<IP>:<port>/
+```
+
+クライアント識別には `poco_client` Cookie を使います。表示名は `poco_name` Cookie または `X-Poco-Name` ヘッダで扱います。
+
+### エンドポイント
 
 | Method | Path | Body / Query | 説明 |
 |---|---|---|---|
-| GET  | `/` | — | リモート UI (HTML) |
-| GET  | `/status` | — | `{accept, volume, clients, marquee, me}` |
-| POST | `/bomb` | — | BOMB 発動 |
-| POST | `/clap` | — | CHEER 発動 |
-| POST | `/hearts` | — | HEARTS 発動 |
-| POST | `/stars` | — | STARS 発動 |
-| POST | `/snow` | — | SNOW 発動 |
-| POST | `/talk?sr=16000` | Int16 LE mono PCM (8–48 kHz) | スピーカへ送出（ミックス） |
-| POST | `/marquee?speed=1..5` | UTF-8 本文（タグ可） | 横スクロール追加 |
-| POST | `/marquee/stop` | — | 全横スクロール停止 |
-| POST | `/name` | `{"name": "表示名"}` | 表示名を Cookie に保存 |
-| POST | `/upload?type={image,video,audio}&filename=…` | 生バイナリ | メディアをキューに投稿 |
+| GET | `/` | - | ブラウザ UI |
+| GET | `/status` | - | `{accept, volume, clients, marquee, me, mine}` |
+| POST | `/bomb` | - | BOMB |
+| POST | `/clap` | - | CHEER |
+| POST | `/hearts` | - | HEARTS |
+| POST | `/stars` | - | STARS |
+| POST | `/snow` | - | SNOW |
+| POST | `/talk?sr=16000` | Int16 LE mono PCM | TALK 音声送信 |
+| POST | `/marquee?speed=1..5` | UTF-8 text | 横スクロール送信 |
+| POST | `/marquee/stop` | - | 横スクロール停止 |
+| POST | `/name` | `{"name":"Alice"}` | 表示名保存 |
+| POST | `/upload?type=image|video|audio&filename=...` | raw binary | メディアアップロード |
+| POST | `/my/stop?kind=image|video|audio|all` | - | 自分のメディアだけ止める |
 
-**拒否時のステータスコード**
+### 主なエラー
 
-| Code | reason | 意味 |
+| Code | reason | 説明 |
 |---|---|---|
 | 503 | `disabled` | グローバル REJECT |
-| 403 | `blocked`  | そのユーザーがブロック済み |
-| 429 | `busy`     | FX debounce 内 |
-| 400 | `empty` / `not_utf8` / `bad_type` | 不正リクエスト |
-| 413 | `too_large_or_empty` | アップロードサイズ超過 |
+| 403 | `blocked` | クライアントが拒否中 |
+| 429 | `busy` | FX debounce または TALK サーバキュー満杯 |
+| 400 | `empty` / `not_utf8` / `bad_type` / `bad_kind` | 不正リクエスト |
+| 413 | `too_large_or_empty` | アップロードサイズ超過または空 |
 
-**例**
+例:
 
 ```bash
 curl -X POST http://192.168.1.23:8080/bomb
-curl -X POST -H 'Content-Type: text/plain; charset=utf-8' \
-     --data-raw '<r>お知らせ</> <big>開始！</big>' \
-     'http://192.168.1.23:8080/marquee?speed=2'
+
+curl -X POST \
+  -H "Content-Type: text/plain; charset=utf-8" \
+  --data-raw "<r>お知らせ</r> <big>19時から開始</big>" \
+  "http://192.168.1.23:8080/marquee?speed=2"
 ```
 
 ---
 
-## ⚙ 設定（`config.ini`）
+## `config.ini`
 
-`POCOBoard.exe` と同じフォルダに置けば起動時に読み込まれます。雛形は `config.example.ini`。
+`config.example.ini` をコピーして `config.ini` を作成します。
 
 ```ini
 # ---- Network ----
-http_host       = 0.0.0.0        # 全NICで LISTEN
+http_host       = 0.0.0.0
 http_port       = 8080
 
 # ---- Audio / behaviour ----
-startup_volume  = 80             # 0..100
+startup_volume  = 80
 accept_on_boot  = true
-debounce_ms     = 300            # FX連打防止
+debounce_ms     = 300
+media_min_play_sec = 60
 
 # ---- Display window ----
-display_screen  = -1             # -1 = 反対側, 0..n = 指定
+display_screen  = -1
 display_fullscreen_on_boot = true
 display_width   = 1600
 display_height  = 900
+image_display_sec = 180
 
 # ---- Control window ----
-control_screen  = -1             # -1 = プライマリ
+control_screen  = -1
 
 # ---- Marquee ----
-marquee_size    = 64             # 横スクロール文字サイズ(px)
+marquee_size    = 64
 ```
 
-コマンドライン引数でも上書き可能:
+起動時オプション:
 
 ```bat
 POCOBoard.exe --port 9000 --no-fullscreen --display-screen 1
@@ -281,40 +319,44 @@ POCOBoard.exe --port 9000 --no-fullscreen --display-screen 1
 
 ---
 
-## 🛠 ビルド（exe 作成）
+## ビルド
 
 ```bat
 build.bat
 ```
 
-`dist\POCOBoard\` に `POCOBoard.exe` 一式が出力されます（約 140 MB、Qt DLL 同梱）。フォルダ丸ごと ZIP にして配布してください。
+成果物は `dist\POCOBoard\` に出力されます。
 
 ---
 
-## 🆘 トラブルシューティング
+## トラブルシューティング
 
 | 症状 | 対処 |
 |---|---|
-| ポート 8080 を bind できない | `config.ini` の `http_port` を変更（例 `8888`） |
-| ブラウザから URL に繋がらない | 同一 LAN か確認 / Windows Defender ファイアウォールで `POCOBoard.exe` を許可 |
-| TALK が使えない | `http://localhost:8080/` で開くか、HTTPS プロキシ経由にする |
-| 動画が真っ黒のまま | Windows の codec 不足。K-Lite Codec Pack や、H.264 mp4 に変換して試す |
-| Display が違うモニタに出る | 「表示」タブで出力スクリーン切り替え or `config.ini` の `display_screen` を明示指定 |
-| SmartScreen に阻まれる | 「詳細情報」→「実行」 |
-| 音が出ない | 音量スライダ確認 / Windows の既定再生デバイス確認 |
-| Display が変なまま | F11 で全画面トグル、または Alt+F4 で閉じて再起動 |
+| ポート 8080 が使えない | `config.ini` の `http_port` を変更 |
+| ブラウザから開けない | Windows Defender Firewall と LAN 接続を確認 |
+| TALK が使えない | `localhost` または HTTPS で確認 |
+| 動画が再生できない | 対応 codec を確認。H.264 MP4 を推奨 |
+| 音が出ない | Windows の再生デバイスとアプリ音量を確認 |
+| Display が別モニタに出ない | 表示タブまたは `display_screen` を確認 |
+| 長時間運用でキャッシュが増える | `cache/uploads` は自動 prune されるが、再生中・キュー中ファイルは保護される |
 
 ---
 
-## ⌨ キーボードショートカット（Display 上で）
+## キーボードショートカット
 
-- **F11** — 全画面トグル
-- **Esc** — 全画面解除
-- **C** — マウスカーソルの表示 / 非表示
+Display ウィンドウ上で有効:
+
+- `F11`
+  全画面切替
+- `Esc`
+  全画面解除
+- `C`
+  カーソル表示 / 非表示
 
 ---
 
-## 🙏 クレジット
+## クレジット
 
-- 元ネタ: [M5Tab-Poco](https://github.com/OwaHigashi/M5Tab-Poco)（M5Stack Tab5 版）
-- Programmed by **ぽこちゃ技術枠　おわ**
+- Original:
+  [M5Tab-Poco](https://github.com/OwaHigashi/M5Tab-Poco)

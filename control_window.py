@@ -255,6 +255,8 @@ class ControlWindow(QWidget):
         self.display = display
         self.queue   = queue
         self.queue.changed.connect(self._refresh_queue)
+        self.display.visualPlaybackStopped.connect(self.queue.clear_playing_visual)
+        self.audio.audioPlaybackStopped.connect(self.queue.clear_playing_audio)
 
         self.setWindowTitle("POCOBoard — Control")
         self.setStyleSheet(_QSS)
@@ -817,8 +819,14 @@ class ControlWindow(QWidget):
         `origin` is just a log tag — "auto" when the autoplay handler
         triggered us, "manual" for an explicit 再生/次へ click.
         """
+        if not os.path.isfile(item.path):
+            self._log_local("ADMIN", f"再生失敗: missing file {item.filename}")
+            return
         if item.kind == "image":
             self.display.show_image(item.path, f"from {item.sender}", item.cid)
+            if self.display._bg_image is None:
+                self._log_local("ADMIN", f"再生失敗: bad image {item.filename}")
+                return
         elif item.kind == "video":
             self.display.play_video(item.path, item.cid)
         elif item.kind == "audio":
