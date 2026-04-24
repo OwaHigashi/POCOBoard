@@ -60,3 +60,22 @@ HTTP request handling under load, queue/playback state sync, and README/docs.
 - Multi-client simultaneous TALK on LAN.
 - USB audio device disconnect / reconnect while running.
 - Long session behavior with many uploads and repeated autoplay transitions.
+
+## Post-review follow-ups (2026-04-25)
+
+- `web_server.py`: kept the 5 s per-recv timeout for short endpoints, but
+  extended it to 60 s for the streaming upload body and restored the
+  previous timeout afterwards. The original blanket 5 s would break large
+  uploads through reverse proxies that buffer the request body
+  (Nginx default `proxy_request_buffering on`).
+- `display_window.py` / `control_window.py`: `DisplayWindow.show_image`
+  now returns `bool`; `_dispatch_play` uses that return value instead of
+  inspecting the private `_bg_image` attribute. The previous check gave a
+  false success when a corrupt new image was uploaded while a different
+  image was already on screen (the old image stayed up and the check saw
+  a non-None pixmap).
+- `media_queue.py`: added a `threading.Lock` so `protected_paths()` can
+  be called safely from the HTTP worker thread. All `MediaQueue`
+  mutations and the cross-thread snapshot read now take the lock;
+  filesystem deletions are performed outside the lock so disk latency
+  does not block queue operations.

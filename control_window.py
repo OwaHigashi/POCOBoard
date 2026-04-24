@@ -823,8 +823,8 @@ class ControlWindow(QWidget):
             self._log_local("ADMIN", f"再生失敗: missing file {item.filename}")
             return
         if item.kind == "image":
-            self.display.show_image(item.path, f"from {item.sender}", item.cid)
-            if self.display._bg_image is None:
+            ok = self.display.show_image(item.path, f"from {item.sender}", item.cid)
+            if not ok:
                 self._log_local("ADMIN", f"再生失敗: bad image {item.filename}")
                 return
         elif item.kind == "video":
