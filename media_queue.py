@@ -17,6 +17,7 @@ Playback rules:
 from __future__ import annotations
 import os
 import re
+import threading
 import time
 import uuid
 from dataclasses import dataclass
@@ -56,6 +57,10 @@ class MediaQueue(QObject):
         self._items: list[QueueItem] = []
         self._playing_visual: Optional[QueueItem] = None
         self._playing_audio:  Optional[QueueItem] = None
+        # Guards _items / _playing_* against the upload-cache pruner, which
+        # runs on an HTTP worker thread (see protected_paths()).  All
+        # mutations and the cross-thread snapshot read take this lock.
+        self._lock = threading.Lock()
 
     # ---------- inbound ----------
     def enqueue(self, kind: str, path: str, sender: str,
@@ -77,7 +82,8 @@ class MediaQueue(QObject):
             added_ms=time.time() * 1000,
             cid=cid or "",
         )
-        self._items.append(item)
+        with self._lock:
+            self._items.append(item)
         self.changed.emit()
         return item
 
@@ -89,24 +95,28 @@ class MediaQueue(QObject):
         if not cid:
             return []
         dropped: list[QueueItem] = []
-        kept: list[QueueItem] = []
-        for it in self._items:
-            if it.cid == cid:
-                dropped.append(it)
-                try:
-                    os.remove(it.path)
-                except OSError:
-                    pass
-            else:
-                kept.append(it)
+        with self._lock:
+            kept: list[QueueItem] = []
+            for it in self._items:
+                if it.cid == cid:
+                    dropped.append(it)
+                else:
+                    kept.append(it)
+            if dropped:
+                self._items = kept
+        for it in dropped:
+            try:
+                os.remove(it.path)
+            except OSError:
+                pass
         if dropped:
-            self._items = kept
             self.changed.emit()
         return dropped
 
     # ---------- queries ----------
     def items(self) -> list[QueueItem]:
-        return list(self._items)
+        with self._lock:
+            return list(self._items)
 
     def playing_visual(self) -> Optional[QueueItem]:
         return self._playing_visual
@@ -118,73 +128,93 @@ class MediaQueue(QObject):
         return len(self._items)
 
     def protected_paths(self) -> set[str]:
-        """Files that must not be pruned from the upload cache yet."""
-        out = {it.path for it in self._items}
-        if self._playing_visual is not None:
-            out.add(self._playing_visual.path)
-        if self._playing_audio is not None:
-            out.add(self._playing_audio.path)
+        """Files that must not be pruned from the upload cache yet.
+
+        Called from an HTTP worker thread, so it must lock against
+        concurrent main-thread mutations of _items / _playing_* — Python
+        list iteration during mutation is not safe even under the GIL.
+        """
+        with self._lock:
+            out = {it.path for it in self._items}
+            if self._playing_visual is not None:
+                out.add(self._playing_visual.path)
+            if self._playing_audio is not None:
+                out.add(self._playing_audio.path)
         return out
 
     # ---------- mutations ----------
     def remove(self, item_id: str) -> Optional[QueueItem]:
         """Drop a queued item (and delete its file — it was never played)."""
-        for i, it in enumerate(self._items):
-            if it.id == item_id:
-                self._items.pop(i)
-                try:
-                    os.remove(it.path)
-                except OSError:
-                    pass
-                self.changed.emit()
-                return it
-        return None
+        found: Optional[QueueItem] = None
+        with self._lock:
+            for i, it in enumerate(self._items):
+                if it.id == item_id:
+                    found = self._items.pop(i)
+                    break
+        if found is None:
+            return None
+        try:
+            os.remove(found.path)
+        except OSError:
+            pass
+        self.changed.emit()
+        return found
 
     def take(self, item_id: str) -> Optional[QueueItem]:
         """Pop an item without deleting its file — caller is about to play it."""
-        for i, it in enumerate(self._items):
-            if it.id == item_id:
-                self._items.pop(i)
-                self.changed.emit()
-                return it
-        return None
+        found: Optional[QueueItem] = None
+        with self._lock:
+            for i, it in enumerate(self._items):
+                if it.id == item_id:
+                    found = self._items.pop(i)
+                    break
+        if found is None:
+            return None
+        self.changed.emit()
+        return found
 
     def clear(self) -> int:
         """Empty the waiting list (not the playing slots). Returns # dropped."""
-        n = len(self._items)
-        for it in self._items:
+        with self._lock:
+            dropped = list(self._items)
+            self._items.clear()
+        for it in dropped:
             try:
                 os.remove(it.path)
             except OSError:
                 pass
-        self._items.clear()
         self.changed.emit()
-        return n
+        return len(dropped)
 
     def mark_playing(self, item: QueueItem) -> None:
         """Record that `item` is now on the display or the speakers."""
-        if item.kind in ("image", "video"):
-            self._playing_visual = item
-        elif item.kind == "audio":
-            self._playing_audio = item
+        with self._lock:
+            if item.kind in ("image", "video"):
+                self._playing_visual = item
+            elif item.kind == "audio":
+                self._playing_audio = item
         self.changed.emit()
 
     def clear_playing_visual(self) -> None:
-        if self._playing_visual is None:
-            return
-        self._playing_visual = None
+        with self._lock:
+            if self._playing_visual is None:
+                return
+            self._playing_visual = None
         self.changed.emit()
 
     def clear_playing_audio(self) -> None:
-        if self._playing_audio is None:
-            return
-        self._playing_audio = None
+        with self._lock:
+            if self._playing_audio is None:
+                return
+            self._playing_audio = None
         self.changed.emit()
 
     def stop_all(self) -> None:
         """Clear both playing slots — called from the 停止 button."""
-        changed = self._playing_visual is not None or self._playing_audio is not None
-        self._playing_visual = None
-        self._playing_audio = None
+        with self._lock:
+            changed = (self._playing_visual is not None
+                       or self._playing_audio is not None)
+            self._playing_visual = None
+            self._playing_audio = None
         if changed:
             self.changed.emit()

@@ -52,7 +52,12 @@ _SAFE_EXT = {
 _SANITIZE_NAME = re.compile(r"[^A-Za-z0-9._-]+")
 _TALK_QUEUE_MAX_ITEMS = 128
 _TALK_QUEUE_MAX_BYTES = 2 * 1024 * 1024
+# Per-recv timeout for short endpoints (status, FX, talk, marquee, name).
+# Streamed uploads use a longer timeout — set in _read_body_streamed —
+# so that reverse proxies that buffer the request body (Nginx default)
+# don't kill big uploads partway through.
 _HTTP_REQUEST_TIMEOUT_SEC = 5.0
+_UPLOAD_RECV_TIMEOUT_SEC  = 60.0
 
 
 def _sanitize_filename(name: str, kind: str) -> str:
@@ -414,19 +419,34 @@ class _Handler(BaseHTTPRequestHandler):
             return -1
         if n <= 0 or n > max_bytes:
             return -1
+        # Uploads can sit silent for tens of seconds when a buffering reverse
+        # proxy (Nginx with proxy_request_buffering on) is between client and
+        # us — extend the per-recv timeout for the body read, then restore.
+        prev_timeout = None
+        try:
+            prev_timeout = self.connection.gettimeout()
+            self.connection.settimeout(_UPLOAD_RECV_TIMEOUT_SEC)
+        except Exception:
+            pass
         remaining = n
         written = 0
-        with open(dest_path, "wb") as f:
-            while remaining > 0:
-                try:
-                    chunk = self.rfile.read(min(64 * 1024, remaining))
-                except (socket.timeout, OSError):
-                    return -1
-                if not chunk:
-                    break
-                f.write(chunk)
-                written += len(chunk)
-                remaining -= len(chunk)
+        try:
+            with open(dest_path, "wb") as f:
+                while remaining > 0:
+                    try:
+                        chunk = self.rfile.read(min(64 * 1024, remaining))
+                    except (socket.timeout, OSError):
+                        return -1
+                    if not chunk:
+                        break
+                    f.write(chunk)
+                    written += len(chunk)
+                    remaining -= len(chunk)
+        finally:
+            try:
+                self.connection.settimeout(prev_timeout)
+            except Exception:
+                pass
         return written
 
     def _who(self) -> tuple[str, str, str, Optional[str]]:

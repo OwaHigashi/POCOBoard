@@ -232,7 +232,7 @@ class DisplayWindow(QWidget):
     @Slot(str)
     @Slot(str, str)
     @Slot(str, str, str)
-    def show_image(self, path: str, caption: str = "", owner: str = "") -> None:
+    def show_image(self, path: str, caption: str = "", owner: str = "") -> bool:
         """Install an uploaded photo as the background.
 
         The image stays on screen — underneath any FX and marquee — for
@@ -241,10 +241,13 @@ class DisplayWindow(QWidget):
         duration to 0 makes the image persist until the operator presses
         停止.  `owner` is the uploader's client_id so that uploader (but
         no one else) can dismiss it from the browser.
+
+        Returns True if the image loaded and was installed, False if the
+        file could not be decoded (any prior background is left untouched).
         """
         pm = QPixmap(path)
         if pm.isNull():
-            return
+            return False
         # Image background replaces video background (but not ongoing FX).
         self._stop_video_internal()
         self._bg_image = pm
@@ -255,6 +258,7 @@ class DisplayWindow(QWidget):
         self._image_timer.stop()
         if self._image_display_sec > 0:
             self._image_timer.start(self._image_display_sec * 1000)
+        return True
 
     def _on_image_timeout(self) -> None:
         """Auto-clear handler: drop the image background only.

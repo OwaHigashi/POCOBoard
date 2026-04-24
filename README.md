@@ -340,6 +340,7 @@ build.bat
 | 音が出ない | Windows の再生デバイスとアプリ音量を確認 |
 | Display が別モニタに出ない | 表示タブまたは `display_screen` を確認 |
 | 長時間運用でキャッシュが増える | `cache/uploads` は自動 prune されるが、再生中・キュー中ファイルは保護される |
+| リバースプロキシ越しに大きい動画がアップロードできない | プロキシのリクエストバッファリングを無効化（例: Nginx の `proxy_request_buffering off;`）するか、`client_max_body_size` を引き上げる |
 
 ---
 
