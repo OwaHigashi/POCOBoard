@@ -81,6 +81,8 @@ def main() -> int:
     disp_w = cfg.get_int("display_width", 1600)
     disp_h = cfg.get_int("display_height", 900)
     marquee_size = cfg.get_int("marquee_size", 64)
+    video_loops  = cfg.get_int("video_loops", 1)
+    image_sec    = cfg.get_int("image_display_sec", 10)
 
     disp_screen_cfg = (args.display_screen
                        if args.display_screen is not None
@@ -131,6 +133,8 @@ def main() -> int:
         marquee_font=marquee_font,
         status_text_cb=lambda: _ready_footer(host, port, bridge),
     )
+    display.set_video_loops(video_loops)
+    display.set_image_display_sec(image_sec)
 
     screens = QGuiApplication.screens()
     n = max(1, len(screens))

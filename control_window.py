@@ -15,7 +15,7 @@ from PySide6.QtGui     import QFont, QGuiApplication
 from PySide6.QtWidgets import (
     QAbstractScrollArea, QComboBox, QFileDialog, QFrame, QGridLayout,
     QGroupBox, QHBoxLayout, QLabel, QPushButton, QScrollArea, QSlider,
-    QTabWidget, QTextEdit, QVBoxLayout, QWidget,
+    QSpinBox, QTabWidget, QTextEdit, QVBoxLayout, QWidget,
 )
 
 from audio        import AudioEngine
@@ -558,15 +558,35 @@ class ControlWindow(QWidget):
         self.btnAudioOpen.clicked.connect(self._open_audio)
         dl.addWidget(self.btnAudioOpen, 2, 1, 1, 2)
 
+        # Live-tunable image display time (seconds).  Defaults to whatever
+        # was loaded from config.ini; 0 = never auto-clear.
+        dl.addWidget(QLabel("画像表示時間 (秒):"), 3, 0)
+        self.spImageSec = QSpinBox()
+        self.spImageSec.setRange(0, 3600)
+        self.spImageSec.setSuffix(" 秒")
+        self.spImageSec.setSpecialValueText("手動停止まで")
+        self.spImageSec.setMinimumHeight(30)
+        self.spImageSec.setValue(self.display._image_display_sec)
+        self.spImageSec.valueChanged.connect(self._on_image_sec_changed)
+        dl.addWidget(self.spImageSec, 3, 1, 1, 2)
+
         hint = QLabel(
             "※ リモートからアップロードされた画像/動画/音声は自動で背景になります。"
-            " 停止は「表示削除」ボタンで。")
+            " 画像は設定秒数で自動消去、動画は config の video_loops で指定した回数再生後に終了。"
+            " 停止は「停止」ボタンで。")
         hint.setProperty("class", "small")
         hint.setWordWrap(True)
-        dl.addWidget(hint, 3, 0, 1, 3)
+        dl.addWidget(hint, 4, 0, 1, 3)
 
-        dl.setRowStretch(4, 1)
+        dl.setRowStretch(5, 1)
         return w
+
+    def _on_image_sec_changed(self, v: int) -> None:
+        self.display.set_image_display_sec(int(v))
+        if v == 0:
+            self._log_local("ADMIN", "画像表示時間: 手動停止まで")
+        else:
+            self._log_local("ADMIN", f"画像表示時間: {v}秒")
 
     # ---- tab: users ----
     def _build_users_tab(self) -> QWidget:

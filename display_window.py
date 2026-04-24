@@ -83,6 +83,18 @@ class DisplayWindow(QWidget):
         self._video_player: Optional[QMediaPlayer] = None
         self._video_audio:  Optional[QAudioOutput] = None
         self._video_active: bool = False
+        # How many times play_video() should loop the clip before stopping.
+        # 1 = play once (default); -1 = loop forever.
+        self._video_loops: int = 1
+
+        # --- image auto-clear timer ---
+        # Images uploaded from remote (or opened locally) stay on screen for
+        # this many seconds, then the background is cleared automatically.
+        # 0 disables auto-clear (image persists until 停止).
+        self._image_display_sec: int = 10
+        self._image_timer = QTimer(self)
+        self._image_timer.setSingleShot(True)
+        self._image_timer.timeout.connect(self._on_image_timeout)
 
     # ---------- activity tracking ----------
     def _mark_activity(self) -> None:
@@ -150,6 +162,29 @@ class DisplayWindow(QWidget):
         else:
             self.show()
 
+    # ---------- configuration setters ----------
+    @Slot(int)
+    def set_image_display_sec(self, sec: int) -> None:
+        """Set the auto-clear timeout for uploaded images (0 = never)."""
+        self._image_display_sec = max(0, int(sec))
+        # If an image is currently displayed, re-arm the timer so changes
+        # from the control window take effect immediately.
+        if self._bg_image is not None:
+            self._image_timer.stop()
+            if self._image_display_sec > 0:
+                self._image_timer.start(self._image_display_sec * 1000)
+
+    @Slot(int)
+    def set_video_loops(self, loops: int) -> None:
+        """Set how many times each video plays (1 = once, -1 = infinite)."""
+        self._video_loops = int(loops) if loops != 0 else 1
+        if self._video_player is not None:
+            self._apply_video_loops()
+
+    def _apply_video_loops(self) -> None:
+        assert self._video_player is not None
+        self._video_player.setLoops(self._video_loops)
+
     # ---------- video overlay ----------
     def _ensure_video_widgets(self) -> None:
         if self._video_widget is not None:
@@ -162,25 +197,22 @@ class DisplayWindow(QWidget):
         self._video_player = QMediaPlayer(self)
         self._video_player.setVideoOutput(self._video_widget)
         self._video_player.setAudioOutput(self._video_audio)
-        # Loop forever — the operator, not the end-of-media, decides when
-        # the background stops.  The sentinel is QMediaPlayer.Infinite (-1)
-        # on Qt 6.
-        try:
-            self._video_player.setLoops(QMediaPlayer.Loops.Infinite)
-        except AttributeError:
-            self._video_player.setLoops(-1)
+        self._apply_video_loops()
         self._video_player.errorOccurred.connect(
             lambda err, msg: print(f"[video] error {err}: {msg}"))
+        # Hide the overlay once the configured number of plays finishes.
+        self._video_player.mediaStatusChanged.connect(self._on_video_status)
 
     @Slot(str)
     @Slot(str, str)
     def show_image(self, path: str, caption: str = "") -> None:
-        """Install an uploaded photo as the persistent background.
+        """Install an uploaded photo as the background.
 
-        The image stays on screen — underneath any FX and marquee — until
-        the operator calls clear_display().  The original transient
-        8-second ImageScene behavior is gone: the user asked for
-        background semantics.
+        The image stays on screen — underneath any FX and marquee — for
+        `image_display_sec` seconds (configured at boot, live-tunable from
+        the control window), after which it is auto-cleared.  Setting the
+        duration to 0 makes the image persist until the operator presses
+        停止.
         """
         pm = QPixmap(path)
         if pm.isNull():
@@ -190,16 +222,38 @@ class DisplayWindow(QWidget):
         self._bg_image = pm
         self._bg_caption = caption or ""
         self._mark_activity()
+        self._image_timer.stop()
+        if self._image_display_sec > 0:
+            self._image_timer.start(self._image_display_sec * 1000)
+
+    def _on_image_timeout(self) -> None:
+        """Auto-clear handler: drop the image background only.
+
+        Leaves FX / marquee / video alone — those have their own lifecycles.
+        No-op if the image has already been replaced or cleared.
+        """
+        if self._bg_image is None:
+            return
+        self._bg_image = None
+        self._bg_caption = ""
 
     @Slot(str)
     def play_video(self, path: str) -> None:
-        """Install a video as the persistent background — loops forever."""
+        """Play a video as the background.
+
+        Loops `video_loops` times (1 = play once, the default; -1 = forever).
+        When the configured play count finishes, the overlay auto-hides — the
+        end-of-media signal drives the cleanup.
+        """
         self._ensure_video_widgets()
         assert self._video_widget and self._video_player
-        # Clear any image background; FX can still run as a transient
-        # overlay because it paints the whole window each frame.
+        # Clear any image background (and cancel its auto-clear timer); FX
+        # can still run as a transient overlay because it paints the whole
+        # window each frame.
+        self._image_timer.stop()
         self._bg_image = None
         self._bg_caption = ""
+        self._apply_video_loops()
         self._video_widget.setGeometry(0, 0, self.width(), self.height())
         # The video widget must be BELOW the QPainter output from paintEvent
         # so marquee text stays on top.  QVideoWidget is itself a subwidget,
@@ -223,6 +277,13 @@ class DisplayWindow(QWidget):
             self._video_widget.hide()
         self._video_active = False
 
+    def _on_video_status(self, status) -> None:
+        # EndOfMedia fires after the configured number of loops finishes.
+        # Clear the overlay so the background returns to the black/idle state.
+        end_val = getattr(QMediaPlayer.MediaStatus, "EndOfMedia", None)
+        if end_val is not None and status == end_val:
+            self._stop_video_internal()
+
     @Slot()
     def stop_video(self) -> None:
         self._stop_video_internal()
@@ -237,6 +298,7 @@ class DisplayWindow(QWidget):
         long scrolling announcement.
         """
         self._stop_video_internal()
+        self._image_timer.stop()
         self._bg_image = None
         self._bg_caption = ""
         self._scene = None
