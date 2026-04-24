@@ -98,6 +98,19 @@ INDEX_HTML = r"""<!doctype html>
   .upload-btn.audio { background: linear-gradient(135deg, #3a8a3a, #10401a); }
   .upload-btn.uploading { opacity:.5; pointer-events:none; }
   #uploadStatus { font-size:13px; opacity:.75; }
+  .mine-box { grid-column: 1 / -1; padding: 12px 14px; border-radius: 14px;
+              background: linear-gradient(135deg, #2a1b1b, #401010);
+              box-shadow: 0 8px 28px rgba(0,0,0,.6); margin-top: 4px;
+              display: none; }
+  .mine-box.show { display: block; }
+  .mine-box .title { font-weight: 800; margin-bottom: 8px; color: #ffc8c8; }
+  .mine-row { display: flex; flex-wrap: wrap; gap: 8px; }
+  .mine-btn { flex: 1 1 140px; padding: 10px 12px; border: 1px solid #a06060;
+              border-radius: 10px; background: #6a1f1f; color: #fff;
+              font-weight: 700; font-size: 15px; cursor: pointer; }
+  .mine-btn:hover { background: #8a2828; }
+  .mine-btn.all  { background: #8a2828; border-color: #c06060; }
+  .mine-btn[disabled] { opacity:.35; cursor: not-allowed; }
   footer { text-align:center; padding:14px; opacity:.5; font-size:12px; }
   .flash { position:fixed; inset:0; background:#fff; opacity:0; pointer-events:none;
            transition: opacity .08s; z-index:9998; }
@@ -145,6 +158,21 @@ INDEX_HTML = r"""<!doctype html>
       </label>
     </div>
     <div id="uploadStatus"></div>
+  </div>
+
+  <!-- Per-user "cancel mine" controls. Appears only while at least one of the
+       media slots is held by THIS browser (verified by cookie on the server). -->
+  <div class="mine-box" id="mineBox">
+    <div class="title">🧍 自分が送ったメディアの取消</div>
+    <div class="mine-row">
+      <button class="mine-btn" id="btnMineImage" disabled>📷 画像を消す</button>
+      <button class="mine-btn" id="btnMineVideo" disabled>🎬 動画を止める</button>
+      <button class="mine-btn" id="btnMineAudio" disabled>🎵 音声を止める</button>
+      <button class="mine-btn all" id="btnMineAll">🛑 自分のぜんぶ取消</button>
+    </div>
+    <div style="font-size:12px; opacity:.75; margin-top:6px;">
+      ※ 他のユーザが出したものは取消できません。
+    </div>
   </div>
 
   <div class="marquee-box">
@@ -281,8 +309,35 @@ async function refreshStatus() {
       // log records our preferred name even if we joined mid-session.
       if (myName) pushName();
     }
+    updateMineControls(j.mine || {image:false, video:false, audio:false});
   } catch (e) { /* network blip */ }
 }
+
+function updateMineControls(mine) {
+  const box = document.getElementById('mineBox');
+  const any = !!(mine.image || mine.video || mine.audio);
+  box.classList.toggle('show', any);
+  document.getElementById('btnMineImage').disabled = !mine.image;
+  document.getElementById('btnMineVideo').disabled = !mine.video;
+  document.getElementById('btnMineAudio').disabled = !mine.audio;
+  document.getElementById('btnMineAll').disabled   = !any;
+}
+
+async function stopMine(kind) {
+  try {
+    const r = await fetch(api('my/stop?kind=' + encodeURIComponent(kind)),
+                          { method: 'POST' });
+    if (!r.ok) {
+      toast('取消失敗: ' + r.status);
+    } else {
+      refreshStatus();
+    }
+  } catch(e) { toast(e.message); }
+}
+document.getElementById('btnMineImage').onclick = () => stopMine('image');
+document.getElementById('btnMineVideo').onclick = () => stopMine('video');
+document.getElementById('btnMineAudio').onclick = () => stopMine('audio');
+document.getElementById('btnMineAll').onclick   = () => stopMine('all');
 
 function flashScreen(color) {
   const f = document.getElementById('flash');
@@ -315,6 +370,9 @@ let talkActive = false;
 let talkCtx = null, talkStream = null, talkProc = null, talkSrc = null;
 let talkFrames = [];
 let talkSendTimer = null;
+let talkWatchdog = null;
+let talkInflight = 0;         // open fetch() count — guards against pile-up
+let talkConsecErrors = 0;     // consecutive network errors for backoff
 // Diagnostics — surfaced below the TALK button so problems are visible.
 let talkStats = { sent: 0, bytes: 0, errors: 0, lastErr: '' };
 
@@ -357,6 +415,15 @@ function updateTalkUi() {
 
 function drainAndSend() {
   if (talkFrames.length === 0) return;
+  // If several requests are already in flight the network can't keep up —
+  // drop this batch rather than letting browser memory balloon.
+  if (talkInflight >= 4) {
+    talkFrames = [];
+    talkStats.errors++;
+    talkStats.lastErr = 'backpressure';
+    renderTalkStatus();
+    return;
+  }
   let total = 0;
   for (const f of talkFrames) total += f.length;
   const merged = new Float32Array(total);
@@ -390,25 +457,60 @@ function drainAndSend() {
   if (pcm.length === 0) return;
 
   const bytes = pcm.byteLength;
+  talkInflight++;
+  // 4s timeout so a hung connection doesn't keep piling inflight counters.
+  const ac = ('AbortController' in window) ? new AbortController() : null;
+  const timer = ac ? setTimeout(() => { try { ac.abort(); } catch(_){} }, 4000) : null;
   fetch(api('talk?sr=' + TALK_TARGET_SR), {
     method: 'POST',
     headers: {'Content-Type': 'application/octet-stream'},
-    body: pcm.buffer
+    body: pcm.buffer,
+    signal: ac ? ac.signal : undefined,
   }).then(r => {
     if (r.ok) {
       talkStats.sent++;
       talkStats.bytes += bytes;
       talkStats.lastErr = '';
+      talkConsecErrors = 0;
     } else {
       talkStats.errors++;
       talkStats.lastErr = 'HTTP ' + r.status;
+      talkConsecErrors++;
     }
     renderTalkStatus();
   }).catch(e => {
     talkStats.errors++;
     talkStats.lastErr = e.message || 'network';
+    talkConsecErrors++;
     renderTalkStatus();
+  }).finally(() => {
+    if (timer) clearTimeout(timer);
+    talkInflight = Math.max(0, talkInflight - 1);
   });
+}
+
+// Periodic health check while TALK is on.  Catches the common failure modes:
+//  (1) AudioContext suspended (tab backgrounded on mobile browsers)
+//  (2) MediaStreamTrack ended (headset unplugged, browser yanked the device)
+//  (3) Sustained network errors — restart the capture to shed any bad state.
+async function talkHealthCheck() {
+  if (!talkActive) return;
+  if (talkCtx && talkCtx.state === 'suspended') {
+    try { await talkCtx.resume(); } catch(_){}
+  }
+  const track = talkStream && talkStream.getAudioTracks &&
+                talkStream.getAudioTracks()[0];
+  const dead = !track || track.readyState === 'ended' ||
+               (talkCtx && talkCtx.state === 'closed');
+  if (dead || talkConsecErrors >= 10) {
+    talkStats.lastErr = dead ? 'mic lost — restarting' : 'too many errors — restarting';
+    renderTalkStatus();
+    try { await talkStop(); } catch(_){}
+    // small delay so the browser has time to release the device before re-opening
+    setTimeout(() => { if (document.getElementById('btnTalk').dataset.shouldBeOn === '1') {
+      talkStart();
+    }}, 400);
+  }
 }
 
 async function talkStart() {
@@ -453,13 +555,17 @@ async function talkStart() {
   mute.connect(talkCtx.destination);
 
   talkActive = true;
+  talkConsecErrors = 0;
+  talkInflight = 0;
   talkSendTimer = setInterval(drainAndSend, TALK_CHUNK_MS);
+  talkWatchdog  = setInterval(talkHealthCheck, 1500);
   updateTalkUi();
 }
 
 async function talkStop() {
   talkActive = false;
   if (talkSendTimer) { clearInterval(talkSendTimer); talkSendTimer = null; }
+  if (talkWatchdog)  { clearInterval(talkWatchdog);  talkWatchdog  = null; }
   drainAndSend();
   try { talkProc && talkProc.disconnect(); } catch(e){}
   try { talkSrc  && talkSrc.disconnect();  } catch(e){}
@@ -470,7 +576,14 @@ async function talkStop() {
 }
 
 document.getElementById('btnTalk').onclick = () => {
-  if (talkActive) talkStop(); else talkStart();
+  const btn = document.getElementById('btnTalk');
+  if (talkActive) {
+    btn.dataset.shouldBeOn = '0';
+    talkStop();
+  } else {
+    btn.dataset.shouldBeOn = '1';
+    talkStart();
+  }
 };
 
 // ============ MARQUEE composer ============

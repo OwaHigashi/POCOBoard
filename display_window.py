@@ -31,6 +31,11 @@ class DisplayWindow(QWidget):
     """Full-area canvas. Fullscreen-capable; no decorations when fullscreen."""
 
     marqueeStatusChanged = Signal(int, int)   # (used, max)
+    # Emitted whenever the "owner" (uploader client_id) of a currently
+    # visible media slot changes.  args = (kind, owner_cid_or_empty)
+    # kind ∈ {'image', 'video'}.  Lets WebBridge know who is allowed to
+    # stop the current background from the browser-side "自分のを取消" button.
+    ownershipChanged = Signal(str, str)
 
     def __init__(self, marquee_font: QFont, status_text_cb=None) -> None:
         super().__init__()
@@ -72,10 +77,11 @@ class DisplayWindow(QWidget):
 
         # --- background layer (persistent; cleared only by operator) ---
         # Image: we keep a pixmap and draw it in paintEvent, letterboxed.
-        # Video: QVideoWidget overlay; we loop infinitely so the background
-        #        keeps showing until the operator presses 表示削除.
+        # Video: QVideoWidget overlay; the minimum-play-time rule decides
+        #        when it stops (see _on_video_status).
         self._bg_image: Optional[QPixmap] = None
         self._bg_caption: str = ""
+        self._bg_image_owner: str = ""    # uploader client_id
 
         # --- video overlay (QMediaPlayer + QVideoWidget) ---
         # Created lazily the first time a video request arrives.
@@ -83,15 +89,20 @@ class DisplayWindow(QWidget):
         self._video_player: Optional[QMediaPlayer] = None
         self._video_audio:  Optional[QAudioOutput] = None
         self._video_active: bool = False
-        # How many times play_video() should loop the clip before stopping.
-        # 1 = play once (default); -1 = loop forever.
-        self._video_loops: int = 1
+        self._video_owner: str = ""       # uploader client_id
+        self._video_url: Optional[QUrl] = None
+        self._video_start_ms: float = 0.0
+        # Minimum playback duration (seconds).  If the natural clip length is
+        # shorter than this, the player restarts from position 0 on each
+        # end-of-media until the total elapsed playback meets the minimum.
+        # 0 = play once, no looping.
+        self._media_min_play_sec: int = 60
 
         # --- image auto-clear timer ---
         # Images uploaded from remote (or opened locally) stay on screen for
         # this many seconds, then the background is cleared automatically.
         # 0 disables auto-clear (image persists until 停止).
-        self._image_display_sec: int = 10
+        self._image_display_sec: int = 180
         self._image_timer = QTimer(self)
         self._image_timer.setSingleShot(True)
         self._image_timer.timeout.connect(self._on_image_timeout)
@@ -175,15 +186,15 @@ class DisplayWindow(QWidget):
                 self._image_timer.start(self._image_display_sec * 1000)
 
     @Slot(int)
-    def set_video_loops(self, loops: int) -> None:
-        """Set how many times each video plays (1 = once, -1 = infinite)."""
-        self._video_loops = int(loops) if loops != 0 else 1
-        if self._video_player is not None:
-            self._apply_video_loops()
+    def set_media_min_play_sec(self, sec: int) -> None:
+        """Set the minimum playback duration for videos (and audio files).
 
-    def _apply_video_loops(self) -> None:
-        assert self._video_player is not None
-        self._video_player.setLoops(self._video_loops)
+        When a clip's natural length is shorter than this, we restart
+        playback from position 0 on each end-of-media until the total
+        elapsed playback time reaches this many seconds.  0 disables the
+        loop-to-minimum behavior (videos play once, then stop).
+        """
+        self._media_min_play_sec = max(0, int(sec))
 
     # ---------- video overlay ----------
     def _ensure_video_widgets(self) -> None:
@@ -197,22 +208,27 @@ class DisplayWindow(QWidget):
         self._video_player = QMediaPlayer(self)
         self._video_player.setVideoOutput(self._video_widget)
         self._video_player.setAudioOutput(self._video_audio)
-        self._apply_video_loops()
+        # Play each clip exactly once; we reschedule via setPosition(0) +
+        # play() inside _on_video_status if the min-play window still
+        # hasn't elapsed.  That way the loop count auto-matches each clip's
+        # natural length (short clips loop, long clips play once).
+        self._video_player.setLoops(1)
         self._video_player.errorOccurred.connect(
             lambda err, msg: print(f"[video] error {err}: {msg}"))
-        # Hide the overlay once the configured number of plays finishes.
         self._video_player.mediaStatusChanged.connect(self._on_video_status)
 
     @Slot(str)
     @Slot(str, str)
-    def show_image(self, path: str, caption: str = "") -> None:
+    @Slot(str, str, str)
+    def show_image(self, path: str, caption: str = "", owner: str = "") -> None:
         """Install an uploaded photo as the background.
 
         The image stays on screen — underneath any FX and marquee — for
         `image_display_sec` seconds (configured at boot, live-tunable from
         the control window), after which it is auto-cleared.  Setting the
         duration to 0 makes the image persist until the operator presses
-        停止.
+        停止.  `owner` is the uploader's client_id so that uploader (but
+        no one else) can dismiss it from the browser.
         """
         pm = QPixmap(path)
         if pm.isNull():
@@ -221,6 +237,8 @@ class DisplayWindow(QWidget):
         self._stop_video_internal()
         self._bg_image = pm
         self._bg_caption = caption or ""
+        self._bg_image_owner = owner or ""
+        self.ownershipChanged.emit("image", self._bg_image_owner)
         self._mark_activity()
         self._image_timer.stop()
         if self._image_display_sec > 0:
@@ -236,14 +254,27 @@ class DisplayWindow(QWidget):
             return
         self._bg_image = None
         self._bg_caption = ""
+        if self._bg_image_owner:
+            self._bg_image_owner = ""
+            self.ownershipChanged.emit("image", "")
+
+    @Slot()
+    def clear_image_bg(self) -> None:
+        """Drop just the image background (per-user 取消 from the browser)."""
+        if self._bg_image is None:
+            return
+        self._image_timer.stop()
+        self._bg_image = None
+        self._bg_caption = ""
+        if self._bg_image_owner:
+            self._bg_image_owner = ""
+            self.ownershipChanged.emit("image", "")
 
     @Slot(str)
-    def play_video(self, path: str) -> None:
-        """Play a video as the background.
-
-        Loops `video_loops` times (1 = play once, the default; -1 = forever).
-        When the configured play count finishes, the overlay auto-hides — the
-        end-of-media signal drives the cleanup.
+    @Slot(str, str)
+    def play_video(self, path: str, owner: str = "") -> None:
+        """Play a video as the background, then stop at first natural end
+        past `media_min_play_sec` (see _on_video_status).
         """
         self._ensure_video_widgets()
         assert self._video_widget and self._video_player
@@ -251,22 +282,23 @@ class DisplayWindow(QWidget):
         # can still run as a transient overlay because it paints the whole
         # window each frame.
         self._image_timer.stop()
-        self._bg_image = None
-        self._bg_caption = ""
-        self._apply_video_loops()
+        if self._bg_image is not None:
+            self._bg_image = None
+            self._bg_caption = ""
+            if self._bg_image_owner:
+                self._bg_image_owner = ""
+                self.ownershipChanged.emit("image", "")
         self._video_widget.setGeometry(0, 0, self.width(), self.height())
-        # The video widget must be BELOW the QPainter output from paintEvent
-        # so marquee text stays on top.  QVideoWidget is itself a subwidget,
-        # and our paintEvent draws onto the main window's paint device, so
-        # text rendered there sits on top naturally.  But we still need the
-        # video widget's native paint — so we keep it visible and just
-        # let paintEvent draw marquee after it.
         self._video_widget.lower()
         self._video_widget.show()
         url = QUrl.fromLocalFile(path) if os.path.isfile(path) else QUrl(path)
+        self._video_url = url
+        self._video_start_ms = time.perf_counter_ns() / 1_000_000.0
         self._video_player.setSource(url)
         self._video_player.play()
         self._video_active = True
+        self._video_owner = owner or ""
+        self.ownershipChanged.emit("video", self._video_owner)
         self._mark_activity()
 
     def _stop_video_internal(self) -> None:
@@ -276,13 +308,32 @@ class DisplayWindow(QWidget):
         if self._video_widget is not None:
             self._video_widget.hide()
         self._video_active = False
+        self._video_url = None
+        if self._video_owner:
+            self._video_owner = ""
+            self.ownershipChanged.emit("video", "")
 
     def _on_video_status(self, status) -> None:
-        # EndOfMedia fires after the configured number of loops finishes.
-        # Clear the overlay so the background returns to the black/idle state.
+        # On EndOfMedia, decide whether to loop (min-play-sec not yet met)
+        # or stop (natural end past the minimum).
         end_val = getattr(QMediaPlayer.MediaStatus, "EndOfMedia", None)
-        if end_val is not None and status == end_val:
-            self._stop_video_internal()
+        if end_val is None or status != end_val:
+            return
+        if not self._video_active or self._video_player is None:
+            return
+        elapsed_ms = (time.perf_counter_ns() / 1_000_000.0) - self._video_start_ms
+        min_ms = self._media_min_play_sec * 1000
+        if elapsed_ms < min_ms and self._video_url is not None:
+            # Loop: seek to start and keep playing.  setPosition + play is
+            # cheaper than re-setSource on Qt 6 / FFmpeg backends.
+            try:
+                self._video_player.setPosition(0)
+                self._video_player.play()
+                return
+            except Exception:
+                # Fall through to stop on any backend misbehavior.
+                pass
+        self._stop_video_internal()
 
     @Slot()
     def stop_video(self) -> None:
@@ -299,8 +350,12 @@ class DisplayWindow(QWidget):
         """
         self._stop_video_internal()
         self._image_timer.stop()
-        self._bg_image = None
-        self._bg_caption = ""
+        if self._bg_image is not None:
+            self._bg_image = None
+            self._bg_caption = ""
+            if self._bg_image_owner:
+                self._bg_image_owner = ""
+                self.ownershipChanged.emit("image", "")
         self._scene = None
         # Bring us back to the black idle state (not the title) — the
         # operator explicitly asked for "quiet black" after clearing.

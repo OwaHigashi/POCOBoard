@@ -81,8 +81,11 @@ def main() -> int:
     disp_w = cfg.get_int("display_width", 1600)
     disp_h = cfg.get_int("display_height", 900)
     marquee_size = cfg.get_int("marquee_size", 64)
-    video_loops  = cfg.get_int("video_loops", 1)
-    image_sec    = cfg.get_int("image_display_sec", 10)
+    # image_display_sec: image background auto-clears after N seconds (0 = never).
+    # media_min_play_sec: videos and uploaded audio loop until at least N seconds
+    #                     have played, then stop at the next natural end (0 = play once).
+    image_sec    = cfg.get_int("image_display_sec", 180)
+    min_play_sec = cfg.get_int("media_min_play_sec", 60)
 
     disp_screen_cfg = (args.display_screen
                        if args.display_screen is not None
@@ -133,8 +136,9 @@ def main() -> int:
         marquee_font=marquee_font,
         status_text_cb=lambda: _ready_footer(host, port, bridge),
     )
-    display.set_video_loops(video_loops)
     display.set_image_display_sec(image_sec)
+    display.set_media_min_play_sec(min_play_sec)
+    audio.set_media_min_play_sec(min_play_sec)
 
     screens = QGuiApplication.screens()
     n = max(1, len(screens))
@@ -183,6 +187,13 @@ def main() -> int:
     # (if auto-play is ON, which is the default) also triggers immediate
     # display.  Push-play mode keeps items waiting for the ▶ button.
     bridge.mediaUploaded.connect(ctrl.on_media_uploaded)
+    # Per-user 取消 (browser-side) — the handler stops only items owned
+    # by the requesting client.
+    bridge.myStopRequested.connect(ctrl.on_my_stop)
+    # Display / audio report ownership changes so the bridge (and therefore
+    # /my/status) stays in sync with what's actually on screen or playing.
+    display.ownershipChanged.connect(bridge.set_owner)
+    audio.ownershipChanged.connect(bridge.set_owner)
 
     # ----- HTTP server -----
     upload_dir = os.path.join(here, "cache", "uploads")
