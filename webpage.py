@@ -261,17 +261,19 @@ INDEX_HTML = r"""<!doctype html>
   }
   .marquee-row button,
   .mine-btn {
-    padding: 8px 12px;
+    padding: 9px 14px;
     border-radius: 12px;
     border: 1px solid var(--line);
     background: var(--surface-soft);
     color: var(--text);
     cursor: pointer;
-    font-weight: 700;
-    font-size: 14px;
+    font-weight: 800;
+    font-size: 15px;
     line-height: 1.2;
+    min-width: 44px;
     transition: transform .12s ease, border-color .18s ease, background .18s ease;
   }
+  .marquee-row button.mkp { letter-spacing: 0.04em; }
   .marquee-row button:hover,
   .mine-btn:hover {
     transform: translateY(-1px);
@@ -302,17 +304,17 @@ INDEX_HTML = r"""<!doctype html>
     color: #4d6476 !important;
   }
   .mkp-speed.on::after { content: " *"; }
-  .mkp-r { background: #edd7d2 !important; }
-  .mkp-g { background: #dde9e1 !important; }
-  .mkp-b { background: #dce7ef !important; }
-  .mkp-y { background: #efe7cf !important; }
-  .mkp-c { background: #d8ebea !important; }
-  .mkp-m { background: #eaddeb !important; }
-  .mkp-w { background: #f3efea !important; }
-  .mkp-o { background: #ecdccf !important; }
-  .mkp-sz { background: #efe8df !important; }
-  .mkp-u { background: #f4eee7 !important; text-decoration: underline; }
-  .mkp-hl { background: #ede6dc !important; box-shadow: inset 0 0 0 2px #d7c8b9; }
+  .mkp-r { background: #f0bfb6 !important; border-color: #d99a8e !important; color: #6b2d22 !important; }
+  .mkp-g { background: #c7d8c9 !important; border-color: #9bb29e !important; color: #2f4632 !important; }
+  .mkp-b { background: #bcd0e2 !important; border-color: #8ba8c1 !important; color: #284359 !important; }
+  .mkp-y { background: #ebd9a3 !important; border-color: #c8b072 !important; color: #5b4914 !important; }
+  .mkp-c { background: #b8dad8 !important; border-color: #82b3b0 !important; color: #1f4845 !important; }
+  .mkp-m { background: #ddc4df !important; border-color: #a888ab !important; color: #4a2950 !important; }
+  .mkp-w { background: #efe9e2 !important; border-color: #b8aa9b !important; color: #322d28 !important; }
+  .mkp-o { background: #ecc7a7 !important; border-color: #c69970 !important; color: #5d3a18 !important; }
+  .mkp-sz { background: #e3d6c4 !important; border-color: #b9a685 !important; color: #3e3422 !important; }
+  .mkp-u { background: #ebe2d3 !important; border-color: #b9a685 !important; color: #3e3422 !important; text-decoration: underline; }
+  .mkp-hl { background: #e0d3bf !important; border-color: #a48f6e !important; color: #3e3422 !important; box-shadow: inset 0 0 0 2px #cdb89a; }
   #mqCount,
   #uploadStatus {
     font-size: 13px;
@@ -416,10 +418,20 @@ INDEX_HTML = r"""<!doctype html>
       padding: 4px;
     }
     .marquee-box, .upload-box, .mine-box { padding: 14px; border-radius: 18px; }
+    .marquee-row { gap: 6px; }
+    .marquee-row button {
+      padding: 10px 12px;
+      font-size: 16px;
+      min-width: 48px;
+      border-radius: 10px;
+    }
+    .marquee-row button.send,
+    .marquee-row button.stop { padding: 10px 18px; font-size: 16px; }
+    .marquee-row .sep { display: none; }
     .upload-row, .mine-row { flex-direction: column; }
     .upload-btn, .mine-btn { width: 100%; }
     .upload-btn { padding: 12px 10px; font-size: 15px; }
-    .mine-btn { padding: 10px 12px; font-size: 14px; }
+    .mine-btn { padding: 10px 12px; font-size: 14px; min-width: 0; }
   }
   @media (max-width: 360px) {
     button.fx { font-size: clamp(11px, 3.2vw, 14px); letter-spacing: 0; }
