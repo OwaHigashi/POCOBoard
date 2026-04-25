@@ -1,6 +1,6 @@
 # Agent Handoff
 
-Updated: 2026-04-25 (README screenshot refresh + accuracy pass)
+Updated: 2026-04-26 (mobile UI fit + marquee tag legibility)
 
 ## Summary
 
@@ -174,3 +174,48 @@ HTTP request handling under load, queue/playback state sync, and README/docs.
   - `config.ini` example: moved `image_display_sec` and
     `media_min_play_sec` into a "Media playback" section, matching the
     real `config.example.ini` layout.
+
+## Mobile UI fixes (2026-04-26)
+
+Two follow-ups in `webpage.py` for the browser-side remote UI; both
+verified by headless-Chrome screenshots into `cache/` (the page was
+loaded inside fixed-width iframes so media queries actually triggered —
+Chrome headless on this host clamps `--window-size` at ~478 px and
+ignored a `<meta viewport width=360>` override).
+
+- **FX buttons fit on phones** (commit `7e49e80`).
+  Previously the `@media (max-width: 640px)` block forced
+  `grid-template-columns: 1fr` with `min-height: 112px`, so the 11 FX
+  buttons stacked to ~1230 px tall and required heavy scrolling.
+  Restored a 3-column grid with `aspect-ratio: 4/3`, dropped
+  `min-height` to 0, clamped font-size to `clamp(12px, 3.4vw, 17px)`,
+  and added `white-space: normal; line-height: 1.1;` so the
+  `🔴 REC — tap to stop` recording label can wrap inside the narrow
+  buttons. Added a `<=360 px` block that drops font further for SE-class
+  phones. Also widened the `<=980 px` (tablet) block from 2 to 3
+  columns with the same 4:3 ratio.
+- **Marquee tag buttons legible on phones** (commit `3e5330b`).
+  The single-kanji `赤 / 黄 / 緑 / 水 / 青 / 紫 / 橙 / 白 / 小 / 中 / 大`
+  pills rendered at 14 px on near-identical pale pastel backgrounds
+  (`#edd7d2`, `#dde9e1`, ...). On a phone the kanji disappeared and the
+  buttons looked indistinguishable. Bumped the base
+  `.marquee-row button` to `font-size: 15px`, `font-weight: 800`,
+  `min-width: 44px`, `padding: 9px 14px`. On `<=640 px` raised to
+  16 px / `min-width: 48px` and hid the `.sep` dividers (rows wrap
+  instead). Replaced the `.mkp-{r,g,b,y,c,m,w,o}` palette with
+  noticeably more saturated tints, gave each tag a matching colored
+  border and a darker on-pill text color so the kanji has clear
+  contrast on every chip.
+
+### Headless-screenshot recipe used
+
+1. Stub `window.fetch` so the page does not error on `/status`:
+   ```js
+   window.fetch = async () => ({ok:true, json: async()=>({accept:true, volume:50, mine:{}, me:{}})});
+   ```
+2. Save the patched HTML as `cache/preview.html`.
+3. Embed it in `cache/wrapper.html` inside three fixed-width iframes
+   (320 / 360 / 414 px) — the iframe's own width drives the inner
+   document's media queries.
+4. `chrome --headless --disable-gpu --hide-scrollbars --window-size=1200,2300 --screenshot=...` against the wrapper.
+5. Crop the screenshot with PIL to focus on the marquee/FX regions.
