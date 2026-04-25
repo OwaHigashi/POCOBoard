@@ -393,18 +393,36 @@ INDEX_HTML = r"""<!doctype html>
   }
   #toast.show { opacity: 1; }
   @media (max-width: 980px) {
-    main { grid-template-columns: repeat(2, minmax(0, 1fr)); padding: 18px; }
-    button.fx { aspect-ratio: 3 / 2; }
+    main { grid-template-columns: repeat(3, minmax(0, 1fr)); padding: 18px; gap: 14px; }
+    button.fx {
+      aspect-ratio: 4 / 3;
+      font-size: clamp(16px, 2.6vw, 26px);
+    }
   }
   @media (max-width: 640px) {
-    header { padding: 14px 16px; align-items: flex-start; }
-    header h1 { font-size: 22px; }
+    header { padding: 12px 14px; align-items: flex-start; }
+    header h1 { font-size: 20px; }
     #who { width: 100%; }
     #who input { width: 100%; }
-    main { grid-template-columns: 1fr; padding: 16px; }
-    button.fx { min-height: 112px; aspect-ratio: auto; }
+    main { grid-template-columns: repeat(3, minmax(0, 1fr)); padding: 12px; gap: 8px; }
+    button.fx {
+      aspect-ratio: 4 / 3;
+      min-height: 0;
+      border-radius: 16px;
+      font-size: clamp(12px, 3.4vw, 17px);
+      letter-spacing: 0.02em;
+      line-height: 1.1;
+      white-space: normal;
+      padding: 4px;
+    }
+    .marquee-box, .upload-box, .mine-box { padding: 14px; border-radius: 18px; }
     .upload-row, .mine-row { flex-direction: column; }
     .upload-btn, .mine-btn { width: 100%; }
+    .upload-btn { padding: 12px 10px; font-size: 15px; }
+    .mine-btn { padding: 10px 12px; font-size: 14px; }
+  }
+  @media (max-width: 360px) {
+    button.fx { font-size: clamp(11px, 3.2vw, 14px); letter-spacing: 0; }
   }
 </style>
 </head>
