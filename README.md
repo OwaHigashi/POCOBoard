@@ -118,10 +118,12 @@ http://192.168.1.23:8080/
 
 ### 上部エリア
 
-- `ACCEPT / REJECT`
-  グローバルに受付を切り替えます。
+- `ACCEPT`
+  右上のトグル。OFF にするとグローバル REJECT になります。
+- `システム終了`
+  右上の終了ボタン。POCOBoard を停止します。
 - ステータス
-  リモート URL、メッセージ数、接続クライアント数を表示します。
+  リモート URL、流れ中メッセージ数、接続中クライアント数を表示します。
 - FX ボタン
   `BOMB / CHEER / HEARTS / STARS / SNOW / PETALS / AURORA / LASER / SUNSET / LEAVES / MARQUEE STOP`
 - 音量スライダ
@@ -187,7 +189,9 @@ http://192.168.1.23:8080/
 - `TALK`
 - 画像 / 動画 / 音声アップロード
 - 横スクロール送信
-- 自分が流している画像 / 動画 / 音声だけを止める `自分のを止める`
+- 自分が出したメディアの取消
+  - 種類別: `画像を消す` / `動画を止める` / `音声を止める`
+  - 一括: `自分のぜんぶ取消` （再生中・キュー待ち両方を一掃）
 
 ### TALK について
 
@@ -324,17 +328,19 @@ http_port       = 8080
 startup_volume  = 80
 accept_on_boot  = true
 debounce_ms     = 300
-media_min_play_sec = 60
 
 # ---- Display window ----
 display_screen  = -1
 display_fullscreen_on_boot = true
 display_width   = 1600
 display_height  = 900
-image_display_sec = 180
 
 # ---- Control window ----
 control_screen  = -1
+
+# ---- Media playback ----
+image_display_sec  = 180
+media_min_play_sec = 60
 
 # ---- Marquee ----
 marquee_size    = 64
