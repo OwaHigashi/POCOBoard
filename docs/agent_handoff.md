@@ -1,6 +1,6 @@
 # Agent Handoff
 
-Updated: 2026-04-25
+Updated: 2026-04-25 (FX scene refinement)
 
 ## Summary
 
@@ -79,3 +79,84 @@ HTTP request handling under load, queue/playback state sync, and README/docs.
   mutations and the cross-thread snapshot read now take the lock;
   filesystem deletions are performed outside the lock so disk latency
   does not block queue operations.
+
+## UI follow-ups (2026-04-25)
+
+- `control_window.py`
+  - Restyled the control UI away from the original dark/high-contrast look.
+  - Final direction is a bright, simple, elegant theme with stronger text
+    contrast than the first light pass.
+  - Added a header-level `システム終了` button on the top right.
+  - `ACCEPT` now sits immediately to the left of `システム終了`.
+- `webpage.py`
+  - Restyled the browser-side remote UI to match the bright control-panel
+    theme.
+  - Preserved responsive behavior for narrow/mobile screens.
+
+## FX scene refinement + rename (2026-04-25)
+
+- `animations.py`: refined every visual effect for stronger production value.
+  - **BOMB**: double-pulse strobe, multi-rim shockwave (3 rings), gradient ember
+    streaks, ember rain after the blast, ground-level hot reflection.
+  - **CHEER**: added curling streamer ribbons, confetti shape variety
+    (rect / triangle / circle), spotlight cones from upper corners,
+    more frequent / larger star bursts.
+  - **HEARTS**: pulsing glow halo, glossy inner highlight, sparkle trail
+    behind larger hearts, pink mist along the bottom, large bokeh hearts
+    in the background.
+  - **STARS**: long gradient trails on shooting stars, occasional larger
+    "wishing stars" with cross-shaped twinkle highlights, twinkling
+    background star field, faint nebula tint.
+  - **SNOW**: replaced circle flakes with proper 6-arm snowflake glyphs,
+    three depth layers (far / mid / near) for parallax, moonlight glow
+    with a small moon disk, faint upper aurora hint.
+  - **PETALS**: three depth layers, refined petal shape with subtle base
+    notch, bokeh sparkle drift, blossom-branch silhouettes near the top
+    corners, bright inner highlight on each petal.
+  - **AURORA**: 4 ribbon bands (was 3) with vertical light pillars, full
+    twinkling background star field, mountain skyline silhouette,
+    subtle water-reflection band above the horizon.
+  - **LASER**: 5 stage beams (was 3), volumetric haze cones, lens flares
+    at both origin and target, occasional strobe flashes, expanded
+    color palette.
+- Renamed `SUMMER → SUNSET` and `AUTUMN → LEAVES` to match the SNOW
+  pattern (concrete element noun, not season name).
+  - **SUNSET**: refined sunset-on-sea scene with backlit cumulus clouds,
+    radial sun rays, animated reflection shaft on the water, sailboat
+    silhouette, three flapping V-shaped seabirds.
+  - **LEAVES**: leaf silhouette is a petal-like elongated teardrop
+    (`_maple_path`) with four rounded notches subtracted from the sides
+    via `QPainterPath.subtracted()` — gives a lobed, leafy edge instead
+    of a star. (Earlier draft used a 5-tip alternating-radius polygon
+    that visually read as a star — fixed.) 5-color autumn palette, tree
+    silhouettes flanking both edges, animated diagonal sun rays,
+    leaf-pile accumulation along the ground.
+- Endpoint paths and UI keys updated everywhere:
+  - `web_server.py`: `/summer` → `/sunset`, `/autumn` → `/leaves`.
+  - `audio.py`: `_make_summer` → `_make_sunset`, `_make_autumn` →
+    `_make_leaves`; preload list and FX factory dict updated.
+  - `webpage.py`: button IDs / classes / labels / trigger calls renamed.
+  - `control_window.py`: button list, QPushButton classes, log tag map
+    updated.
+  - `README.md`: button list, descriptions, and HTTP API table updated.
+- Verified: `py_compile` passes; all 10 scenes render 8 frames each
+  through `QPainter` on a 800x450 `QImage` without exception.
+
+## UX note: `自分のぜんぶ取消`
+
+- Current behavior is intentionally not an "undo to previous visual" action.
+- `display_window.py` treats image and video as mutually replacing visual
+  backgrounds:
+  - showing an image stops any active video
+  - starting a video clears any active image
+- Therefore, if a user uploads an image and then uploads a video, stopping
+  the video does not restore the prior image; the display returns to the
+  idle/empty state because the image was already cleared when the video
+  started.
+- The meaning of `自分のぜんぶ取消` in the current implementation is:
+  - stop any currently active image/video/audio owned by that client
+  - remove any queued media owned by that client
+- This button is most meaningful when the same client owns multiple active
+  media types and/or still has queued uploads waiting to play.
+- The user reviewed this behavior and explicitly accepted leaving the
+  wording/behavior unchanged for now.

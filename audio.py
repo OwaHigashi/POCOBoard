@@ -167,6 +167,101 @@ def _make_snow(sr: int = FX_SR) -> bytes:
     return _bytes_int16(snd)
 
 
+def _make_petals(sr: int = FX_SR) -> bytes:
+    dur = 2.0
+    n = int(sr * dur)
+    snd = [0.0] * n
+    tones = [659.3, 783.99, 987.77, 1174.66]
+    for idx, freq in enumerate(tones):
+        start = int((0.12 + idx * 0.22) * sr)
+        for i in range(start, n):
+            t = (i - start) / sr
+            env = math.exp(-3.8 * t) * (1 - math.exp(-24 * t))
+            snd[i] += math.sin(2 * math.pi * freq * t) * env * 0.26
+            snd[i] += math.sin(2 * math.pi * freq * 2.01 * t) * env * 0.08
+    prev = 0.0
+    for i in range(n):
+        raw = random.random() * 2 - 1
+        prev = prev * 0.985 + raw * 0.015
+        snd[i] += prev * 0.06
+        snd[i] = math.tanh(snd[i] * 1.05) * 0.82
+    return _bytes_int16(snd)
+
+
+def _make_aurora(sr: int = FX_SR) -> bytes:
+    dur = 2.6
+    n = int(sr * dur)
+    snd = [0.0] * n
+    for i in range(n):
+        t = i / sr
+        env = (1 - math.exp(-2.8 * t)) * math.exp(-0.38 * t)
+        base = math.sin(2 * math.pi * (210 + 24 * math.sin(0.7 * t)) * t)
+        harm = math.sin(2 * math.pi * (420 + 18 * math.cos(0.5 * t)) * t)
+        air = math.sin(2 * math.pi * 960 * t + math.sin(2 * math.pi * 2.4 * t))
+        snd[i] = (base * 0.28 + harm * 0.12 + air * 0.05) * env
+    return _bytes_int16([math.tanh(s * 1.15) * 0.84 for s in snd])
+
+
+def _make_laser(sr: int = FX_SR) -> bytes:
+    dur = 1.5
+    n = int(sr * dur)
+    snd = [0.0] * n
+    hits = [0.00, 0.18, 0.34, 0.52, 0.78]
+    for idx, start_s in enumerate(hits):
+        start = int(start_s * sr)
+        sweep_from = 1800 - idx * 120
+        sweep_to = 320 + idx * 60
+        for i in range(start, n):
+            t = (i - start) / sr
+            if t > 0.22:
+                break
+            frac = t / 0.22
+            freq = sweep_from + (sweep_to - sweep_from) * frac
+            env = math.exp(-12 * t)
+            snd[i] += math.sin(2 * math.pi * freq * t) * env * 0.55
+            snd[i] += math.sin(2 * math.pi * freq * 1.8 * t) * env * 0.12
+    for i in range(n):
+        snd[i] = math.tanh(snd[i] * 1.25) * 0.86
+    return _bytes_int16(snd)
+
+
+def _make_sunset(sr: int = FX_SR) -> bytes:
+    dur = 2.8
+    n = int(sr * dur)
+    snd = [0.0] * n
+    for i in range(n):
+        t = i / sr
+        env = (1 - math.exp(-3.2 * t)) * math.exp(-0.28 * t)
+        wave = math.sin(2 * math.pi * 0.55 * t)
+        bass = math.sin(2 * math.pi * 196 * t + 0.2 * math.sin(2 * math.pi * 0.3 * t))
+        glow = math.sin(2 * math.pi * 392 * t) + math.sin(2 * math.pi * 588 * t) * 0.35
+        foam = (random.random() * 2 - 1) * 0.04 * (0.5 + 0.5 * math.sin(2 * math.pi * 2.2 * t))
+        snd[i] = (bass * 0.22 + glow * 0.1 + wave * 0.08 + foam) * env
+    return _bytes_int16([math.tanh(s * 1.18) * 0.84 for s in snd])
+
+
+def _make_leaves(sr: int = FX_SR) -> bytes:
+    dur = 2.3
+    n = int(sr * dur)
+    snd = [0.0] * n
+    notes = [392.0, 493.88, 587.33, 659.25]
+    for idx, freq in enumerate(notes):
+        start = int((0.08 + idx * 0.18) * sr)
+        for i in range(start, n):
+            t = (i - start) / sr
+            env = math.exp(-3.5 * t) * (1 - math.exp(-18 * t))
+            snd[i] += math.sin(2 * math.pi * freq * t) * env * 0.18
+            snd[i] += math.sin(2 * math.pi * freq * 1.5 * t) * env * 0.07
+    prev = 0.0
+    for i in range(n):
+        raw = random.random() * 2 - 1
+        prev = prev * 0.975 + raw * 0.025
+        flutter = 0.6 + 0.4 * math.sin(2 * math.pi * 4.0 * (i / sr))
+        snd[i] += prev * flutter * 0.08
+        snd[i] = math.tanh(snd[i] * 1.08) * 0.83
+    return _bytes_int16(snd)
+
+
 # =====================================================
 #  Per-client TALK stream
 # =====================================================
@@ -354,6 +449,8 @@ class AudioEngine(QObject):
         makers = {
             "bomb":   _make_bomb,  "clap":   _make_cheer,
             "hearts": _make_hearts, "stars":  _make_stars, "snow": _make_snow,
+            "petals": _make_petals, "aurora": _make_aurora, "laser": _make_laser,
+            "sunset": _make_sunset, "leaves": _make_leaves,
         }
         fn = makers.get(kind)
         if fn is None:
@@ -363,7 +460,7 @@ class AudioEngine(QObject):
         return data
 
     def preload(self) -> None:
-        for k in ("bomb", "clap", "hearts", "stars", "snow"):
+        for k in ("bomb", "clap", "hearts", "stars", "snow", "petals", "aurora", "laser", "sunset", "leaves"):
             self._fx_bytes(k)
 
     @Slot(str)

@@ -13,7 +13,7 @@ import socket
 from PySide6.QtCore    import Qt, QTimer, Signal, Slot
 from PySide6.QtGui     import QFont, QGuiApplication
 from PySide6.QtWidgets import (
-    QAbstractScrollArea, QComboBox, QFileDialog, QFrame, QGridLayout,
+    QApplication, QAbstractScrollArea, QComboBox, QFileDialog, QFrame, QGridLayout,
     QGroupBox, QHBoxLayout, QLabel, QPushButton, QScrollArea, QSlider,
     QSpinBox, QTabWidget, QTextEdit, QVBoxLayout, QWidget,
 )
@@ -26,62 +26,258 @@ from web_server   import WebBridge
 
 # ---------- style ----------
 _QSS = """
-QWidget { background: #13151b; color: #e6e8ee; font-family: "Segoe UI Variable Text", "Segoe UI", sans-serif; font-size: 14px; }
-QGroupBox { border: 1px solid #2a2f3a; border-radius: 10px; margin-top: 12px; padding: 12px 10px 8px 10px; font-weight: 700; }
-QGroupBox::title { subcontrol-origin: margin; left: 14px; padding: 0 6px; color: #a0b4d0; }
-QLabel#small, QLabel.small { color: #93a0b8; font-size: 12px; }
-QLabel.url   { color: #8ad0ff; font-family: Consolas, "Cascadia Code", monospace; font-size: 14px; }
-QTabWidget::pane { border: 1px solid #2a2f3a; border-radius: 8px; top:-1px; background:#13151b; }
-QTabBar::tab { background:#1c2030; color:#b8c2d6; padding: 8px 18px;
-               border:1px solid #2a2f3a; border-bottom: none;
-               border-top-left-radius:8px; border-top-right-radius:8px;
-               margin-right:2px; font-weight:700; }
-QTabBar::tab:selected { background:#2a304a; color:#fff; }
-QTabBar::tab:hover { background:#252a3c; }
-QPushButton { background: #1f2430; color: #eef1f7; border: 1px solid #39404f;
-              border-radius: 10px; padding: 8px 12px; font-weight: 600; }
-QPushButton:hover { background: #293040; }
-QPushButton:pressed { background: #151a24; }
-QPushButton.fx { font-size: 18px; font-weight: 800; letter-spacing: 2px;
-                 padding: 14px 10px; border: none; color: #fff; }
-QPushButton.fx:disabled { background: #2a2f3a; color: #6a7080; }
-QPushButton.bomb   { background: qradialgradient(cx:0.3, cy:0.3, radius:1, fx:0.3, fy:0.3,
-                      stop:0 #ff8040, stop:0.55 #a02020, stop:1 #300a0a); }
-QPushButton.clap   { background: qradialgradient(cx:0.3, cy:0.3, radius:1, fx:0.3, fy:0.3,
-                      stop:0 #ffe066, stop:0.55 #cc3a9a, stop:1 #3a1060); }
-QPushButton.hearts { background: qradialgradient(cx:0.3, cy:0.3, radius:1, fx:0.3, fy:0.3,
-                      stop:0 #ff9acc, stop:0.55 #cc3355, stop:1 #560022); }
-QPushButton.stars  { background: qradialgradient(cx:0.3, cy:0.3, radius:1, fx:0.3, fy:0.3,
-                      stop:0 #ffffaa, stop:0.5  #e07a10, stop:1 #3a1a00); }
-QPushButton.snow   { background: qradialgradient(cx:0.3, cy:0.3, radius:1, fx:0.3, fy:0.3,
-                      stop:0 #ffffff, stop:0.6  #88bbee, stop:1 #102038); color: #0a1628; }
-QPushButton.clear  { background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                      stop:0 #7a1a1a, stop:1 #a05020); color:#fff;
-                      font-size:17px; font-weight:800; padding: 14px 10px;
-                      border: 1px solid #c06040; }
-QPushButton.clear:hover { background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                      stop:0 #902020, stop:1 #c06028); }
-QPushButton.toggleOn  { background: #1b7f3a; border-color: #2a9a4a; color:#fff; font-weight:700; }
-QPushButton.toggleOff { background: #b22525; border-color: #d03a3a; color:#fff; font-weight:700; }
-QPushButton.send { background: #1b7f3a; border-color: #2a9a4a; font-weight: 800; }
-QPushButton.stop { background: #7f1b1b; border-color: #9a2a2a; font-weight: 800; }
-QSlider::groove:horizontal { height: 10px; background: #242a36; border-radius: 5px; }
-QSlider::sub-page:horizontal { background: #f0a040; border-radius: 5px; }
-QSlider::handle:horizontal { background: #fff; width: 20px; margin: -6px 0;
-                             border-radius: 10px; border: 2px solid #3d4556; }
-QComboBox { background: #1b1f29; border: 1px solid #39404f; padding: 6px 10px;
-            border-radius: 8px; min-height: 26px; }
-QComboBox QAbstractItemView { background: #1b1f29; color: #eef1f7;
-                              selection-background-color: #2f5fa8; }
-QTextEdit, QPlainTextEdit { background: #0c0e14; border: 1px solid #39404f;
-                            border-radius: 10px; padding: 10px;
-                            font-family: "Segoe UI", sans-serif; font-size: 15px; }
-QScrollArea { border: 1px solid #39404f; border-radius: 10px; background:#0c0e14; }
-QScrollBar:vertical { background:#0c0e14; width:12px; margin:2px; }
-QScrollBar::handle:vertical { background:#39404f; border-radius:4px; min-height:30px; }
-QScrollBar::handle:vertical:hover { background:#505a70; }
+QWidget {
+    background: #f6f2ec;
+    color: #312b26;
+    font-family: "Segoe UI Variable Text", "Aptos", "Segoe UI", sans-serif;
+    font-size: 14px;
+}
+QGroupBox {
+    background: #fffdfa;
+    border: 1px solid #ddd4c8;
+    border-radius: 18px;
+    margin-top: 14px;
+    padding: 14px 12px 10px 12px;
+    font-weight: 700;
+}
+QGroupBox::title {
+    subcontrol-origin: margin;
+    left: 16px;
+    padding: 0 8px;
+    color: #6f645a;
+}
+QLabel#appTitle {
+    color: #342f2a;
+    letter-spacing: 1px;
+}
+QLabel#small, QLabel.small {
+    color: #6e665f;
+    font-size: 12px;
+}
+QLabel.url {
+    color: #4e5d6a;
+    font-family: Consolas, "Cascadia Code", monospace;
+    font-size: 14px;
+}
+QLabel#infoCard {
+    background: #fbf8f4;
+    border: 1px solid #ded7cd;
+    border-radius: 14px;
+    padding: 10px 12px;
+    color: #433d37;
+    font-family: Consolas, "Cascadia Code", monospace;
+    font-size: 13px;
+}
+QWidget#listSurface {
+    background: #fbf8f4;
+    border-radius: 14px;
+}
+QWidget#queueRow, QWidget#userRow {
+    background: #ffffff;
+    border: 1px solid #e3dbd0;
+    border-radius: 14px;
+}
+QLabel#queueMeta, QLabel#userLabel {
+    background: transparent;
+    color: #342f2a;
+}
+QLabel#statusDot {
+    background: transparent;
+    font-size: 18px;
+    font-weight: 700;
+}
+QLabel#statusDot[active="true"] { color: #7da287; }
+QLabel#statusDot[active="false"] { color: #b9b1a7; }
+QTabWidget::pane {
+    border: 1px solid #ddd4c8;
+    border-radius: 18px;
+    top: -1px;
+    background: #fffdfa;
+}
+QTabBar::tab {
+    background: #efe8df;
+    color: #675f57;
+    padding: 10px 18px;
+    border: 1px solid #ddd4c8;
+    border-bottom: none;
+    border-top-left-radius: 12px;
+    border-top-right-radius: 12px;
+    margin-right: 4px;
+    font-weight: 700;
+}
+QTabBar::tab:selected {
+    background: #fffdfa;
+    color: #342f2a;
+    border-color: #d3cabf;
+}
+QTabBar::tab:hover {
+    background: #f4eee6;
+    color: #48413b;
+}
+QPushButton {
+    background: #f7f2eb;
+    color: #342f2a;
+    border: 1px solid #d6cdbf;
+    border-radius: 12px;
+    padding: 9px 14px;
+    font-weight: 600;
+}
+QPushButton:hover {
+    background: #f1e9de;
+    border-color: #cbbfad;
+}
+QPushButton:pressed {
+    background: #ece3d7;
+}
+QPushButton:disabled {
+    background: #f1ede6;
+    color: #9a9085;
+    border-color: #e1d9ce;
+}
+QPushButton.primary {
+    background: #8aa39a;
+    border-color: #789088;
+    color: #ffffff;
+    font-weight: 800;
+}
+QPushButton.primary:hover {
+    background: #7d978e;
+    border-color: #6e877f;
+}
+QPushButton.fx {
+    font-size: 18px;
+    font-weight: 800;
+    letter-spacing: 1px;
+    padding: 16px 12px;
+    color: #ffffff;
+}
+QPushButton.fx:disabled {
+    background: #f1ede6;
+    color: #b2a99d;
+    border-color: #e1d9ce;
+}
+QPushButton.bomb   { background: #d89a8f; border-color: #cc8a7f; }
+QPushButton.clap   { background: #cfb998; border-color: #c1aa87; color: #4b4034; }
+QPushButton.hearts { background: #d3a1af; border-color: #c58f9d; }
+QPushButton.stars  { background: #d8c69d; border-color: #cab788; color: #4d4331; }
+QPushButton.snow   { background: #a7bccb; border-color: #93aaba; color: #ffffff; }
+QPushButton.petals { background: #e4b8c8; border-color: #d7a2b5; color: #ffffff; }
+QPushButton.aurora { background: #a7c8c1; border-color: #90b5ad; color: #ffffff; }
+QPushButton.laser  { background: #b8b3d8; border-color: #a29cc8; color: #ffffff; }
+QPushButton.sunset { background: #d8a27f; border-color: #c48b64; color: #ffffff; }
+QPushButton.leaves { background: #ca8f62; border-color: #b3744b; color: #ffffff; }
+QPushButton.clear {
+    background: #c48f80;
+    border-color: #b77d6d;
+    color: #ffffff;
+    font-size: 17px;
+    font-weight: 800;
+    padding: 14px 12px;
+}
+QPushButton.clear:hover {
+    background: #bb8374;
+    border-color: #ac7566;
+}
+QPushButton.toggleOn {
+    background: #8ea79e;
+    border-color: #7a9289;
+    color: #ffffff;
+    font-weight: 700;
+}
+QPushButton.toggleOff {
+    background: #c99a92;
+    border-color: #b8867f;
+    color: #ffffff;
+    font-weight: 700;
+}
+QPushButton.send {
+    background: #93aaa2;
+    border-color: #80978f;
+    color: #ffffff;
+    font-weight: 800;
+}
+QPushButton.warn {
+    background: #cbb390;
+    border-color: #b99f78;
+    color: #4c4030;
+    font-weight: 800;
+}
+QPushButton.stop {
+    background: #cda099;
+    border-color: #bc8c84;
+    color: #ffffff;
+    font-weight: 800;
+}
+QSlider::groove:horizontal {
+    height: 10px;
+    background: #e4dbcf;
+    border-radius: 5px;
+}
+QSlider::sub-page:horizontal {
+    background: #bfa68a;
+    border-radius: 5px;
+}
+QSlider::handle:horizontal {
+    background: #fffdfa;
+    width: 20px;
+    margin: -6px 0;
+    border-radius: 10px;
+    border: 2px solid #bfa68a;
+}
+QComboBox, QSpinBox {
+    background: #fffdfa;
+    border: 1px solid #d6cdbf;
+    padding: 6px 10px;
+    border-radius: 10px;
+    min-height: 26px;
+}
+QComboBox QAbstractItemView {
+    background: #fffdfa;
+    color: #342f2a;
+    selection-background-color: #e6ddd2;
+}
+QSpinBox::up-button, QSpinBox::down-button {
+    width: 18px;
+    border: none;
+    background: transparent;
+}
+QTextEdit, QPlainTextEdit {
+    background: #fffdfa;
+    border: 1px solid #ddd4c8;
+    border-radius: 14px;
+    padding: 10px;
+    font-family: "Segoe UI Variable Text", "Segoe UI", sans-serif;
+    font-size: 15px;
+}
+QTextEdit:focus, QComboBox:focus, QSpinBox:focus {
+    border-color: #b7aa9a;
+}
+QScrollArea {
+    border: 1px solid #ddd4c8;
+    border-radius: 14px;
+    background: #fbf8f4;
+}
+QScrollBar:vertical {
+    background: #f5f1ea;
+    width: 12px;
+    margin: 2px;
+}
+QScrollBar::handle:vertical {
+    background: #d0c5b8;
+    border-radius: 5px;
+    min-height: 30px;
+}
+QScrollBar::handle:vertical:hover {
+    background: #bbaea0;
+}
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height:0; }
 """
+
+
+def _repolish(widget: QWidget) -> None:
+    widget.style().unpolish(widget)
+    widget.style().polish(widget)
+    widget.update()
 
 
 def _local_ip() -> str:
@@ -134,10 +330,11 @@ class _QueueRow(QWidget):
                  on_play, on_delete) -> None:
         super().__init__()
         self._item = item
-        self.setFixedHeight(42)
-        self.setStyleSheet("background: transparent;")
+        self.setObjectName("queueRow")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setFixedHeight(54)
         row = QHBoxLayout(self)
-        row.setContentsMargins(8, 2, 8, 2)
+        row.setContentsMargins(12, 6, 12, 6)
         row.setSpacing(10)
 
         # Kind pill (color-coded)
@@ -147,9 +344,10 @@ class _QueueRow(QWidget):
             "audio": ("🎵 MP3", "#3a8a3a"),
         }.get(item.kind, ("📎", "#555"))
         pill = QLabel(kind_style[0])
+        pill.setObjectName("queueKindPill")
         pill.setStyleSheet(
             f"background:{kind_style[1]}; color:#fff; "
-            "border-radius:6px; padding:4px 8px; "
+            "border-radius:8px; padding:5px 8px; "
             "font-weight:700; font-size:11px;"
         )
         pill.setFixedWidth(74)
@@ -160,6 +358,7 @@ class _QueueRow(QWidget):
         size_kb = max(1, item.size // 1024)
         size_txt = f"{size_kb} KB" if size_kb < 1024 else f"{size_kb/1024:.1f} MB"
         lbl = QLabel(f"{item.filename}   ({size_txt})  —  {item.sender}")
+        lbl.setObjectName("queueMeta")
         lbl.setStyleSheet("font-family:'Segoe UI Variable Text'; font-size:13px;")
         lbl.setToolTip(item.path)
         row.addWidget(lbl, 1)
@@ -168,18 +367,16 @@ class _QueueRow(QWidget):
         btn_play = QPushButton("▶ 再生")
         btn_play.setFixedWidth(80)
         btn_play.setFixedHeight(30)
-        btn_play.setStyleSheet(
-            "background:#1b7f3a; color:#fff; border:1px solid #2a9a4a; "
-            "border-radius:6px; font-weight:700;")
+        btn_play.setProperty("class", "send")
+        _repolish(btn_play)
         btn_play.clicked.connect(lambda: on_play(item))
         row.addWidget(btn_play)
 
         btn_del = QPushButton("🗑 削除")
         btn_del.setFixedWidth(76)
         btn_del.setFixedHeight(30)
-        btn_del.setStyleSheet(
-            "background:#7f1b1b; color:#fff; border:1px solid #9a2a2a; "
-            "border-radius:6px; font-weight:700;")
+        btn_del.setProperty("class", "stop")
+        _repolish(btn_del)
         btn_del.clicked.connect(lambda: on_delete(item))
         row.addWidget(btn_del)
 
@@ -191,20 +388,20 @@ class _UserRow(QWidget):
         super().__init__()
         self._bridge = bridge
         self._client_id = client_info["id"]
-        self.setFixedHeight(38)
-        self.setStyleSheet("background: transparent;")
+        self.setObjectName("userRow")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setFixedHeight(46)
 
         row = QHBoxLayout(self)
-        row.setContentsMargins(8, 2, 8, 2)
+        row.setContentsMargins(12, 6, 12, 6)
         row.setSpacing(10)
 
         idle_ms = client_info.get("idle_ms", 10_000)
         active = idle_ms < 30_000
         dot = QLabel("●")
-        dot.setStyleSheet(
-            f"color: {'#50e070' if active else '#505560'}; "
-            "font-size: 18px; font-weight: bold;"
-        )
+        dot.setObjectName("statusDot")
+        dot.setProperty("active", active)
+        _repolish(dot)
         dot.setFixedWidth(16)
         row.addWidget(dot)
 
@@ -213,6 +410,7 @@ class _UserRow(QWidget):
         label_text = f"{name}  (#{short})" if name else f"#{short}"
         lbl = QLabel(label_text)
         lbl.setToolTip(f"IP: {client_info.get('ip','?')}\nID: {self._client_id}")
+        lbl.setObjectName("userLabel")
         lbl.setStyleSheet("font-family: 'Segoe UI Variable Text'; font-size: 14px;")
         row.addWidget(lbl, 1)
 
@@ -228,14 +426,11 @@ class _UserRow(QWidget):
     def _apply_btn_style(self) -> None:
         if self.btn.isChecked():
             self.btn.setText("🚫 拒否中")
-            self.btn.setStyleSheet(
-                "background: #b22525; color: #fff; border: 1px solid #d03a3a; "
-                "border-radius: 8px; font-weight: 700;")
+            self.btn.setProperty("class", "toggleOff")
         else:
             self.btn.setText("✓ 許可中")
-            self.btn.setStyleSheet(
-                "background: #1b7f3a; color: #fff; border: 1px solid #2a9a4a; "
-                "border-radius: 8px; font-weight: 700;")
+            self.btn.setProperty("class", "toggleOn")
+        _repolish(self.btn)
 
     def _on_toggled(self, checked: bool) -> None:
         self._bridge.set_blocked(self._client_id, checked)
@@ -310,6 +505,7 @@ class ControlWindow(QWidget):
     def _build_header(self) -> QHBoxLayout:
         header = QHBoxLayout()
         title = QLabel("🎛  POCOBoard")
+        title.setObjectName("appTitle")
         tf = QFont("Segoe UI Variable Display", 20)
         tf.setBold(True)
         title.setFont(tf)
@@ -323,6 +519,13 @@ class ControlWindow(QWidget):
         self.btnAccept.setMinimumHeight(34)
         self.btnAccept.clicked.connect(self._on_accept_toggled)
         header.addWidget(self.btnAccept)
+
+        self.btnQuit = QPushButton("システム終了")
+        self.btnQuit.setProperty("class", "stop")
+        self.btnQuit.setMinimumWidth(140)
+        self.btnQuit.setMinimumHeight(34)
+        self.btnQuit.clicked.connect(self._on_quit_clicked)
+        header.addWidget(self.btnQuit)
         return header
 
     def _build_status(self) -> QWidget:
@@ -354,6 +557,11 @@ class ControlWindow(QWidget):
             ("HEARTS", "hearts"),
             ("STARS",  "stars"),
             ("SNOW",   "snow"),
+            ("PETALS", "petals"),
+            ("AURORA", "aurora"),
+            ("LASER",  "laser"),
+            ("SUNSET", "sunset"),
+            ("LEAVES", "leaves"),
         ]
         for i, (label, kind) in enumerate(fx_defs):
             b = QPushButton(label)
@@ -366,7 +574,7 @@ class ControlWindow(QWidget):
         stop_btn.setProperty("class", "stop")
         stop_btn.setMinimumHeight(62)
         stop_btn.clicked.connect(self._local_marquee_stop)
-        gx.addWidget(stop_btn, 1, 2)
+        gx.addWidget(stop_btn, 3, 1)
         return fx_box
 
     def _build_volume(self) -> QWidget:
@@ -401,10 +609,9 @@ class ControlWindow(QWidget):
         # ▶ 次へ: pop the top of the queue and play it (useful when push-play
         # is on, or to advance past a paused-in-queue stack).
         self.btnNext = QPushButton("▶ 次へ")
+        self.btnNext.setProperty("class", "primary")
         self.btnNext.setMinimumHeight(48)
-        self.btnNext.setStyleSheet(
-            "background:#1b7f3a; color:#fff; border:1px solid #2a9a4a;"
-            "border-radius:10px; font-weight:800; font-size:15px;")
+        _repolish(self.btnNext)
         self.btnNext.clicked.connect(self._on_next)
         top.addWidget(self.btnNext, 2)
 
@@ -433,10 +640,7 @@ class ControlWindow(QWidget):
 
         # Now-playing indicator (kept compact; highlights what 停止 will kill)
         self.lblNowPlaying = QLabel("再生中: (なし)")
-        self.lblNowPlaying.setStyleSheet(
-            "background:#0c0e14; border:1px solid #39404f; border-radius:8px;"
-            "padding:8px 10px; font-family:Consolas,monospace; font-size:13px;"
-            "color:#aed6ff;")
+        self.lblNowPlaying.setObjectName("infoCard")
         self.lblNowPlaying.setWordWrap(True)
         self.lblNowPlaying.setMinimumHeight(52)
         layout.addWidget(self.lblNowPlaying)
@@ -449,7 +653,8 @@ class ControlWindow(QWidget):
         self.queueScroll = QScrollArea()
         self.queueScroll.setWidgetResizable(True)
         self._queueHost = QWidget()
-        self._queueHost.setStyleSheet("background:#0c0e14;")
+        self._queueHost.setObjectName("listSurface")
+        self._queueHost.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self._queueLayout = QVBoxLayout(self._queueHost)
         self._queueLayout.setContentsMargins(6, 6, 6, 6)
         self._queueLayout.setSpacing(4)
@@ -478,12 +683,14 @@ class ControlWindow(QWidget):
             if tag is None:
                 sep = QFrame()
                 sep.setFrameShape(QFrame.Shape.VLine)
-                sep.setStyleSheet("color:#39404f;")
+                sep.setStyleSheet("color:#d7cec2;")
                 row.addWidget(sep)
                 continue
             b = QPushButton(label)
             if color:
-                b.setStyleSheet(f"background:{color}; color:#fff; font-weight:700;")
+                b.setStyleSheet(
+                    f"background:{color}; color:#ffffff; font-weight:700;"
+                    "border:1px solid rgba(70,63,56,0.12);")
             b.setFixedHeight(30)
             b.setMinimumWidth(36)
             b.clicked.connect(lambda _=False, t=tag: self._insert_tag(t))
@@ -624,7 +831,8 @@ class ControlWindow(QWidget):
         self.userScroll.setWidgetResizable(True)
         self.userScroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self._usersHost = QWidget()
-        self._usersHost.setStyleSheet("background:#0c0e14;")
+        self._usersHost.setObjectName("listSurface")
+        self._usersHost.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self._usersLayout = QVBoxLayout(self._usersHost)
         self._usersLayout.setContentsMargins(6, 6, 6, 6)
         self._usersLayout.setSpacing(4)
@@ -643,9 +851,9 @@ class ControlWindow(QWidget):
         self.logView.setReadOnly(True)
         self.logView.setLineWrapMode(QTextEdit.LineWrapMode.NoWrap)
         self.logView.setStyleSheet(
-            "QTextEdit { background: #06080e; color: #d6dce8; "
+            "QTextEdit { background: #fffdfa; color: #433d37; "
             "font-family: Consolas, 'Cascadia Code', monospace; font-size: 13px; "
-            "border: 1px solid #39404f; border-radius: 10px; padding: 8px; }"
+            "border: 1px solid #ddd4c8; border-radius: 14px; padding: 8px; }"
         )
         ll.addWidget(self.logView, stretch=1)
         row = QHBoxLayout()
@@ -685,20 +893,20 @@ class ControlWindow(QWidget):
 
     # ---------------- request log ----------------
     _LOG_COLORS = {
-        "BOMB":         "#ff8a4a",
-        "CHEER":        "#ffd85a",
-        "HEARTS":       "#ff74b0",
-        "STARS":        "#ffe06a",
-        "SNOW":         "#a8d4ff",
-        "TALK":         "#7ee6ea",
-        "MARQUEE":      "#ffa85a",
-        "MARQUEE/STOP": "#d08a8a",
-        "UPLOAD":       "#aaffaa",
-        "JOIN":         "#7ee6a2",
-        "NAME":         "#c0b4ff",
-        "LOCAL":        "#e0b0ff",
-        "ADMIN":        "#ffccff",
-        "MY/STOP":      "#ffaa70",
+        "BOMB":         "#c57b69",
+        "CHEER":        "#a88d55",
+        "HEARTS":       "#b9778d",
+        "STARS":        "#ae9558",
+        "SNOW":         "#6f8fa7",
+        "TALK":         "#6d9aa1",
+        "MARQUEE":      "#bf8960",
+        "MARQUEE/STOP": "#b28787",
+        "UPLOAD":       "#73937e",
+        "JOIN":         "#7a9f84",
+        "NAME":         "#8c7cad",
+        "LOCAL":        "#9c87aa",
+        "ADMIN":        "#aa7f9a",
+        "MY/STOP":      "#b88867",
     }
 
     @Slot(str, str)
@@ -846,12 +1054,10 @@ class ControlWindow(QWidget):
         if not items:
             # Nothing to advance to — subtle feedback via button flash.
             self.btnNext.setStyleSheet(
-                "background:#333; color:#888; border:1px solid #444;"
-                "border-radius:10px; font-weight:800; font-size:15px;")
+                "background:#ece6dd; color:#93897d; border:1px solid #d8cfc3;"
+                "border-radius:12px; font-weight:800; font-size:15px;")
             QTimer.singleShot(400, lambda:
-                self.btnNext.setStyleSheet(
-                    "background:#1b7f3a; color:#fff; border:1px solid #2a9a4a;"
-                    "border-radius:10px; font-weight:800; font-size:15px;"))
+                self.btnNext.setStyleSheet(""))
             return
         self._on_play_item(items[0])
 
@@ -872,16 +1078,11 @@ class ControlWindow(QWidget):
     def _apply_autoplay_style(self) -> None:
         if self._autoplay:
             self.btnAutoplay.setText("自動再生 ON")
-            self.btnAutoplay.setStyleSheet(
-                "background:#1b7f3a; color:#fff; border:1px solid #2a9a4a;"
-                "border-radius:10px; font-weight:800; font-size:15px;"
-                "padding:6px 10px;")
+            self.btnAutoplay.setProperty("class", "primary")
         else:
             self.btnAutoplay.setText("プッシュ再生 (手動)")
-            self.btnAutoplay.setStyleSheet(
-                "background:#7f4a1b; color:#fff; border:1px solid #9a6a2a;"
-                "border-radius:10px; font-weight:800; font-size:15px;"
-                "padding:6px 10px;")
+            self.btnAutoplay.setProperty("class", "warn")
+        _repolish(self.btnAutoplay)
 
     @Slot(str, str, str, str, str)
     def on_media_uploaded(self, cid: str, label: str, ip: str,
@@ -936,12 +1137,16 @@ class ControlWindow(QWidget):
             self._log_local("ADMIN", f"キュー全削除 ({n}件)")
 
     # ---------------- event handlers ----------------
+    def _on_quit_clicked(self) -> None:
+        app = QApplication.instance()
+        if app is not None:
+            app.quit()
+
     def _on_accept_toggled(self, checked: bool) -> None:
         self.btnAccept.setChecked(checked)
         self.btnAccept.setText("ACCEPT" if checked else "REJECT")
         self.btnAccept.setProperty("class", "toggleOn" if checked else "toggleOff")
-        self.btnAccept.style().unpolish(self.btnAccept)
-        self.btnAccept.style().polish(self.btnAccept)
+        _repolish(self.btnAccept)
         self.bridge.set_accept(checked)
 
     def _on_volume_changed(self, v: int) -> None:
@@ -953,7 +1158,9 @@ class ControlWindow(QWidget):
         import time
         now_ms = int(time.time() * 1000)
         tag = {"bomb": "BOMB", "clap": "CHEER", "hearts": "HEARTS",
-               "stars": "STARS", "snow": "SNOW"}.get(kind, kind.upper())
+               "stars": "STARS", "snow": "SNOW", "petals": "PETALS",
+               "aurora": "AURORA", "laser": "LASER", "sunset": "SUNSET",
+               "leaves": "LEAVES"}.get(kind, kind.upper())
         if not self.bridge.fx_try_acquire(now_ms):
             self._log_local(tag, "  ✖ busy (debounced)")
             return
@@ -999,7 +1206,9 @@ class ControlWindow(QWidget):
             self._log_local("MARQUEE", f"x{speed}  {preview}")
         else:
             self._log_local("MARQUEE", f"x{speed}  ✖ {res}  {preview}")
-            self.btnMqSend.setStyleSheet("background:#7f1b1b; border-color:#9a2a2a;")
+            self.btnMqSend.setStyleSheet(
+                "background:#cda099; border:1px solid #bc8c84; color:#ffffff;"
+                "border-radius:12px; font-weight:800;")
             QTimer.singleShot(600, lambda:
                 self.btnMqSend.setStyleSheet(""))
 
