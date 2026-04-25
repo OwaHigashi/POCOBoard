@@ -1,6 +1,6 @@
 # Agent Handoff
 
-Updated: 2026-04-25 (FX scene refinement)
+Updated: 2026-04-25 (README screenshot refresh + accuracy pass)
 
 ## Summary
 
@@ -160,3 +160,17 @@ HTTP request handling under load, queue/playback state sync, and README/docs.
   media types and/or still has queued uploads waiting to play.
 - The user reviewed this behavior and explicitly accepted leaving the
   wording/behavior unchanged for now.
+
+## README refresh (2026-04-25)
+
+- Regenerated all four control-window screenshots in `docs/img/` via
+  `cache/render_readme_screens.py` to reflect the bright pastel palette.
+- Fixed three accuracy gaps in `README.md`:
+  - 上部エリア: replaced "ACCEPT / REJECT" pair with the actual layout
+    (single ACCEPT toggle + システム終了 button on the top right).
+  - ブラウザ UI: replaced obsolete "自分のを止める" wording with the
+    real per-kind buttons (画像を消す / 動画を止める / 音声を止める)
+    and the all-at-once 自分のぜんぶ取消 button.
+  - `config.ini` example: moved `image_display_sec` and
+    `media_min_play_sec` into a "Media playback" section, matching the
+    real `config.example.ini` layout.
