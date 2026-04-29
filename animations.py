@@ -1669,6 +1669,337 @@ class ImageScene(Scene):
 
 
 # =====================================================
+#  PianoRollScene — live MIDI capture: 88-key keyboard + scrolling note bars
+# =====================================================
+#
+# Layout (top → bottom):
+#   * Roll area: ~82 % of height. Notes appear at the keyboard top edge
+#     when a Note-ON arrives and scroll UPWARD at a constant pixels-per-second
+#     rate.  While a note is held the bar grows upward (its bottom edge stays
+#     at the keyboard edge); on Note-OFF the bar's bottom releases and scrolls
+#     up with the rest, so the bar's height freezes at duration * pps.
+#   * Keyboard area: 88 keys (MIDI 21..108 = A0..C8), 52 white + 36 black.
+#     Pressed keys glow with the note's color while held.
+#
+# This scene NEVER auto-expires (alive == True forever) — it lives until the
+# operator turns piano-roll mode off.
+
+# White-key membership for one octave (index = note % 12, starting at C).
+# Pattern: C C# D D# E F F# G G# A A# B
+_PIANO_WHITE = (True, False, True, False, True,
+                True, False, True, False, True, False, True)
+
+# Hue per pitch class (note % 12) — spans the rainbow but slightly skewed
+# so adjacent semitones feel different.  A and C land on warm anchors.
+_PIANO_HUE = [
+    0.00,   # C  - red
+    0.05,   # C#
+    0.09,   # D  - orange
+    0.13,   # D#
+    0.17,   # E  - yellow
+    0.30,   # F  - green-yellow
+    0.40,   # F#
+    0.50,   # G  - cyan
+    0.60,   # G#
+    0.66,   # A  - blue
+    0.75,   # A#
+    0.83,   # B  - violet
+]
+
+
+class PianoRollScene(Scene):
+    """Persistent scene that draws an 88-key piano + scrolling note roll.
+
+    State is updated via `note_on(note, velocity)` and `note_off(note)`
+    from the DisplayWindow when MIDI events arrive.  `update(dt_ms)` only
+    advances the internal clock and prunes notes that have scrolled fully
+    off-screen — it always returns True (the scene is exited only when the
+    operator switches piano-mode off).
+    """
+
+    duration_ms = float("inf")
+    MIN_NOTE = 21       # A0
+    MAX_NOTE = 108      # C8
+    KEYBOARD_HEIGHT_FRAC = 0.18
+
+    def __init__(self, w: int, h: int, scroll_pps: float = 110.0) -> None:
+        super().__init__(w, h)
+        self.alive = True
+        self.scroll_pps = float(scroll_pps)
+        self._now_ms = 0.0
+        self._active: dict[int, dict] = {}      # note -> {start_ms, vel}
+        # Each completed entry: {note, start_ms, end_ms, vel}.  Sorted by
+        # arrival.  Pruned when its top edge has scrolled above y=0.
+        self._completed: list[dict] = []
+        self._build_layout(w, h)
+
+    # ---------- layout ----------
+    def _build_layout(self, w: int, h: int) -> None:
+        n_white = sum(1 for n in range(self.MIN_NOTE, self.MAX_NOTE + 1)
+                      if _PIANO_WHITE[n % 12])
+        # White-key column index for each note.  For black keys: the index
+        # of the white key immediately to its LEFT (used to position the
+        # black-key bar at the boundary between two whites).
+        self._white_count = n_white
+        self._note_meta: dict[int, tuple[bool, int]] = {}
+        wi = 0
+        last_white = 0
+        for n in range(self.MIN_NOTE, self.MAX_NOTE + 1):
+            if _PIANO_WHITE[n % 12]:
+                self._note_meta[n] = (True, wi)
+                last_white = wi
+                wi += 1
+            else:
+                self._note_meta[n] = (False, last_white)
+
+    def resize(self, w: int, h: int) -> None:
+        # Keep notes intact when the window resizes — only rebuild geometry.
+        self.w = w
+        self.h = h
+        # No per-key cache to rebuild beyond what _build_layout already set.
+
+    # ---------- input from MidiEngine ----------
+    def note_on(self, note: int, velocity: int) -> None:
+        if not (self.MIN_NOTE <= note <= self.MAX_NOTE):
+            return
+        # If the same note is already held (e.g. dropped Note-OFF from a
+        # cheap MIDI controller) close the prior segment first so we don't
+        # leak an "infinite" sustain into _active.
+        if note in self._active:
+            d = self._active.pop(note)
+            self._completed.append({
+                "note": note, "start_ms": d["start_ms"],
+                "end_ms": self._now_ms, "vel": d["vel"],
+            })
+        self._active[note] = {"start_ms": self._now_ms,
+                              "vel": max(1, min(127, int(velocity)))}
+
+    def note_off(self, note: int) -> None:
+        d = self._active.pop(note, None)
+        if d is None:
+            return
+        self._completed.append({
+            "note": note, "start_ms": d["start_ms"],
+            "end_ms": self._now_ms, "vel": d["vel"],
+        })
+
+    def all_off(self) -> None:
+        """Release every held note — used when the engine reconnects."""
+        for note in list(self._active):
+            self.note_off(note)
+
+    # ---------- per-frame update ----------
+    def update(self, dt_ms: float) -> bool:
+        self._now_ms += dt_ms
+        # Off-screen condition: a completed note whose TOP edge is above 0.
+        #   top_y = kb_top - (now - start_ms) / 1000 * pps   (px)
+        # Off-screen when (now - start_ms)/1000 * pps > kb_top
+        #               i.e. start_ms < now_ms - kb_top * 1000 / pps
+        kb_top = self._keyboard_top_px()
+        if self.scroll_pps > 0:
+            cutoff_ms = self._now_ms - (kb_top * 1000.0 / self.scroll_pps) - 500.0
+            if self._completed:
+                self._completed = [n for n in self._completed
+                                   if n["start_ms"] >= cutoff_ms]
+        return True
+
+    def _keyboard_top_px(self) -> float:
+        return max(60.0, self.h * (1.0 - self.KEYBOARD_HEIGHT_FRAC))
+
+    # ---------- drawing ----------
+    def draw(self, p: QPainter, w: int, h: int) -> None:
+        # In case the display was resized between init and the first paint.
+        if w != self.w or h != self.h:
+            self.resize(w, h)
+
+        kb_top = self._keyboard_top_px()
+        roll_h = kb_top
+        # Background: dark slate; subtle horizontal bands at every C for
+        # readability.
+        p.fillRect(0, 0, w, h, QColor(8, 12, 20))
+        self._draw_roll_grid(p, w, kb_top)
+        self._draw_notes(p, w, kb_top)
+        self._draw_keyboard(p, w, kb_top, h - kb_top)
+
+    def _key_geometry(self, note: int, kb_top: float) -> tuple[float, float, bool]:
+        """Returns (x_left, width, is_white) for `note`'s on-screen column."""
+        is_white, idx = self._note_meta[note]
+        white_w = self.w / max(1, self._white_count)
+        if is_white:
+            return (idx * white_w, white_w, True)
+        # Black-key column: centered on the boundary between idx and idx+1.
+        bw = white_w * 0.62
+        cx = (idx + 1) * white_w
+        return (cx - bw / 2.0, bw, False)
+
+    def _draw_roll_grid(self, p: QPainter, w: int, kb_top: float) -> None:
+        # Subtle vertical lines between octaves (every C → MIDI 24,36,48,...).
+        white_w = w / max(1, self._white_count)
+        p.setPen(QPen(QColor(255, 255, 255, 14), 1.0))
+        for n in range(24, self.MAX_NOTE + 1, 12):
+            if not (self.MIN_NOTE <= n <= self.MAX_NOTE):
+                continue
+            _, idx = self._note_meta[n]
+            x = idx * white_w
+            p.drawLine(QPointF(x, 0), QPointF(x, kb_top))
+        # Faint horizontal time bands every ~1 second of scroll for cadence.
+        if self.scroll_pps > 0:
+            band_px = self.scroll_pps  # 1 second worth of pixels
+            offset_px = (self._now_ms / 1000.0 * self.scroll_pps) % band_px
+            y = kb_top - offset_px
+            p.setPen(QPen(QColor(255, 255, 255, 10), 1.0))
+            while y > 0:
+                p.drawLine(QPointF(0, y), QPointF(w, y))
+                y -= band_px
+
+    def _draw_notes(self, p: QPainter, w: int, kb_top: float) -> None:
+        pps = self.scroll_pps
+        if pps <= 0:
+            return
+        # Drawing order matters: completed notes first, then held notes on
+        # top so the bottom-anchored part of the held bar always wins.
+        # Within each group we draw white-column notes first so the slimmer
+        # black-column bars sit visually on top (matches keyboard physics).
+        bars: list[tuple[bool, int, float, float, int, bool]] = []
+        # Tuple: (is_white, note, top_y, bottom_y, vel, is_held)
+        now_ms = self._now_ms
+        for note, d in self._active.items():
+            held_ms = max(0.0, now_ms - d["start_ms"])
+            top_y = kb_top - (held_ms / 1000.0) * pps
+            top_y = max(-20.0, top_y)
+            is_white = self._note_meta[note][0]
+            bars.append((is_white, note, top_y, kb_top, d["vel"], True))
+        for d in self._completed:
+            note = d["note"]
+            elapsed_since_off = max(0.0, now_ms - d["end_ms"])
+            duration_ms = max(0.0, d["end_ms"] - d["start_ms"])
+            bottom_y = kb_top - (elapsed_since_off / 1000.0) * pps
+            top_y = bottom_y - (duration_ms / 1000.0) * pps
+            if bottom_y < -10:
+                continue
+            is_white = self._note_meta[note][0]
+            bars.append((is_white, note, top_y, bottom_y, d["vel"], False))
+        # White first, then black, so black bars stack on top.
+        bars.sort(key=lambda b: (0 if b[0] else 1))
+        for is_white, note, top_y, bottom_y, vel, held in bars:
+            self._draw_one_bar(p, note, top_y, bottom_y, vel, held, kb_top)
+
+    def _draw_one_bar(self, p: QPainter, note: int,
+                      top_y: float, bottom_y: float,
+                      vel: int, held: bool, kb_top: float) -> None:
+        x, width, is_white = self._key_geometry(note, kb_top)
+        height = max(2.0, bottom_y - top_y)
+        # Velocity → brightness/saturation amplification.
+        v_norm = max(0.25, vel / 127.0)
+        hue = _PIANO_HUE[note % 12]
+        sat = 0.85 if is_white else 0.95
+        val = 0.60 + 0.35 * v_norm
+        body = hsv(hue, sat, val, 0.92 if held else 0.78)
+        edge = hsv(hue, sat * 0.6, min(1.0, val + 0.25), 1.0)
+
+        # Held notes get a soft outer glow so the active key visually stands out.
+        if held:
+            glow_w = width * 1.65
+            glow = hsv(hue, sat * 0.7, 1.0, 0.32)
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(QBrush(glow))
+            p.drawRoundedRect(QRectF(x - (glow_w - width) / 2.0,
+                                     bottom_y - height,
+                                     glow_w, height),
+                              width * 0.45, width * 0.45)
+
+        # Main bar with rounded top + small inner highlight.
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QBrush(body))
+        radius = min(width * 0.35, 9.0)
+        p.drawRoundedRect(QRectF(x + 1.0, top_y, width - 2.0, height),
+                          radius, radius)
+        # Inner highlight on the top quarter of the bar.
+        if height >= 14:
+            hl_h = min(height * 0.22, 18.0)
+            hl = QLinearGradient(QPointF(0, top_y),
+                                 QPointF(0, top_y + hl_h))
+            hl_top = QColor(255, 255, 255, 90)
+            hl_bot = QColor(255, 255, 255, 0)
+            hl.setColorAt(0.0, hl_top)
+            hl.setColorAt(1.0, hl_bot)
+            p.setBrush(QBrush(hl))
+            p.drawRoundedRect(QRectF(x + 2.0, top_y + 1.0,
+                                     width - 4.0, hl_h),
+                              radius * 0.7, radius * 0.7)
+        # Rim.
+        p.setPen(QPen(edge, 1.4))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawRoundedRect(QRectF(x + 1.0, top_y, width - 2.0, height),
+                          radius, radius)
+
+    def _draw_keyboard(self, p: QPainter, w: int, kb_top: float, kb_h: float) -> None:
+        white_w = w / max(1, self._white_count)
+        # Subtle backboard above the keyboard for separation.
+        p.fillRect(QRectF(0, kb_top - 4, w, 4), QColor(0, 0, 0, 220))
+        # White keys.
+        for n in range(self.MIN_NOTE, self.MAX_NOTE + 1):
+            is_white, idx = self._note_meta[n]
+            if not is_white:
+                continue
+            x = idx * white_w
+            r = QRectF(x, kb_top, white_w - 1.0, kb_h)
+            held = n in self._active
+            if held:
+                vel = self._active[n]["vel"]
+                hue = _PIANO_HUE[n % 12]
+                base = hsv(hue, 0.45, 0.95, 1.0)
+                p.fillRect(r, base)
+            else:
+                p.fillRect(r, QColor(245, 246, 248))
+            p.setPen(QPen(QColor(0, 0, 0, 110), 1))
+            p.drawRect(r)
+            # C-octave label on every C.
+            if n % 12 == 0:
+                f = QFont("Segoe UI Variable Text", 0)
+                f.setPixelSize(max(10, int(white_w * 0.55)))
+                f.setBold(True)
+                p.setFont(f)
+                fm = QFontMetricsF(f)
+                octave = (n // 12) - 1
+                txt = f"C{octave}"
+                tw = fm.horizontalAdvance(txt)
+                p.setPen(QColor(120, 130, 145, 220))
+                p.drawText(int(x + (white_w - tw) / 2),
+                           int(kb_top + kb_h - 6), txt)
+        # Black keys (drawn on top of whites).
+        bk_h = kb_h * 0.62
+        bk_w_ratio = 0.62
+        for n in range(self.MIN_NOTE, self.MAX_NOTE + 1):
+            is_white, idx = self._note_meta[n]
+            if is_white:
+                continue
+            bw = white_w * bk_w_ratio
+            cx = (idx + 1) * white_w
+            x = cx - bw / 2.0
+            r = QRectF(x, kb_top, bw, bk_h)
+            held = n in self._active
+            if held:
+                vel = self._active[n]["vel"]
+                hue = _PIANO_HUE[n % 12]
+                base = hsv(hue, 0.85, 0.85, 1.0)
+                p.fillRect(r, base)
+            else:
+                p.fillRect(r, QColor(20, 22, 28))
+            # Subtle gradient cap on the front edge of black keys.
+            cap = QLinearGradient(QPointF(0, kb_top + bk_h - 6),
+                                  QPointF(0, kb_top + bk_h))
+            cap.setColorAt(0.0, QColor(0, 0, 0, 0))
+            cap.setColorAt(1.0, QColor(0, 0, 0, 140))
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(QBrush(cap))
+            p.drawRect(r)
+            p.setPen(QPen(QColor(0, 0, 0, 200), 1))
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.drawRect(r)
+
+
+# =====================================================
 #  Scene factory
 # =====================================================
 def make_scene(name: str, w: int, h: int) -> Scene | None:

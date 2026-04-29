@@ -25,6 +25,7 @@ from PySide6.QtWidgets import QApplication, QMessageBox
 from config         import Config
 from audio          import AudioEngine
 from media_queue    import MediaQueue
+from midi_engine    import MidiEngine
 from web_server     import WebBridge, run_in_thread
 from control_window import ControlWindow
 from display_window import DisplayWindow
@@ -86,6 +87,8 @@ def main() -> int:
     #                     have played, then stop at the next natural end (0 = play once).
     image_sec    = cfg.get_int("image_display_sec", 180)
     min_play_sec = cfg.get_int("media_min_play_sec", 60)
+    piano_pps    = cfg.get_int("piano_scroll_pps", 110)
+    piano_fx_op  = cfg.get_int("piano_fx_opacity_pct", 55)
 
     disp_screen_cfg = (args.display_screen
                        if args.display_screen is not None
@@ -138,7 +141,19 @@ def main() -> int:
     )
     display.set_image_display_sec(image_sec)
     display.set_media_min_play_sec(min_play_sec)
+    display.set_piano_scroll_pps(float(piano_pps))
+    display.set_piano_fx_opacity(max(0, min(100, piano_fx_op)) / 100.0)
     audio.set_media_min_play_sec(min_play_sec)
+
+    # USB MIDI input (optional — degrades gracefully when mido is missing).
+    midi = MidiEngine()
+    if not MidiEngine.is_available():
+        print(f"[pocoboard] MIDI: unavailable ({MidiEngine.import_error()})")
+    else:
+        ports = midi.list_ports()
+        print(f"[pocoboard] MIDI ports: {ports if ports else '(none)'}")
+    midi.noteOn.connect(display.piano_note_on)
+    midi.noteOff.connect(display.piano_note_off)
 
     screens = QGuiApplication.screens()
     n = max(1, len(screens))
@@ -150,7 +165,7 @@ def main() -> int:
                             fallback_size=(disp_w, disp_h))
 
     # ----- control window -----
-    ctrl = ControlWindow(bridge, audio, display, media_queue)
+    ctrl = ControlWindow(bridge, audio, display, media_queue, midi=midi)
     ctrl.set_http_address(host, port)
     ctrl.set_initial_volume(startup_volume)
     ctrl.set_initial_accept(accept_on_boot)
@@ -218,6 +233,10 @@ def main() -> int:
     ctrl.refresh_users()
 
     rc = app.exec()
+    try:
+        midi.close_port()
+    except Exception:
+        pass
     try:
         srv.shutdown()
     except Exception:

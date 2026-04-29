@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
 from audio        import AudioEngine
 from display_window import DisplayWindow
 from media_queue  import MediaQueue, QueueItem
+from midi_engine  import MidiEngine
 from web_server   import WebBridge
 
 
@@ -443,15 +444,20 @@ class _UserRow(QWidget):
 class ControlWindow(QWidget):
 
     def __init__(self, bridge: WebBridge, audio: AudioEngine,
-                 display: DisplayWindow, queue: MediaQueue) -> None:
+                 display: DisplayWindow, queue: MediaQueue,
+                 midi: MidiEngine | None = None) -> None:
         super().__init__()
         self.bridge  = bridge
         self.audio   = audio
         self.display = display
         self.queue   = queue
+        self.midi    = midi
         self.queue.changed.connect(self._refresh_queue)
         self.display.visualPlaybackStopped.connect(self.queue.clear_playing_visual)
         self.audio.audioPlaybackStopped.connect(self.queue.clear_playing_audio)
+        # Mirror display-side piano-mode toggles back into the bridge so the
+        # HTTP layer agrees with what the operator sees on screen.
+        self.display.pianoModeChanged.connect(self._on_piano_mode_changed)
 
         self.setWindowTitle("POCOBoard — Control")
         self.setStyleSheet(_QSS)
@@ -788,8 +794,149 @@ class ControlWindow(QWidget):
         hint.setWordWrap(True)
         dl.addWidget(hint, 4, 0, 1, 3)
 
-        dl.setRowStretch(5, 1)
+        # ---- Piano roll (USB MIDI) ----
+        piano_box = self._build_piano_box()
+        dl.addWidget(piano_box, 5, 0, 1, 3)
+
+        dl.setRowStretch(6, 1)
         return w
+
+    # ---- piano roll (USB MIDI) controls ----
+    def _build_piano_box(self) -> QWidget:
+        box = QGroupBox("🎹 ピアノロール (USB MIDI)")
+        gl = QGridLayout(box)
+        gl.setContentsMargins(10, 10, 10, 10)
+        gl.setHorizontalSpacing(10)
+        gl.setVerticalSpacing(8)
+
+        # Row 0: ON/OFF toggle + status
+        self.btnPianoMode = QPushButton("ピアノロール OFF")
+        self.btnPianoMode.setCheckable(True)
+        self.btnPianoMode.setMinimumHeight(40)
+        self.btnPianoMode.setProperty("class", "toggleOff")
+        self.btnPianoMode.clicked.connect(self._on_piano_toggle_clicked)
+        gl.addWidget(self.btnPianoMode, 0, 0)
+
+        self.lblPianoStatus = QLabel(self._compose_piano_status())
+        self.lblPianoStatus.setObjectName("infoCard")
+        self.lblPianoStatus.setWordWrap(True)
+        self.lblPianoStatus.setMinimumHeight(40)
+        gl.addWidget(self.lblPianoStatus, 0, 1, 1, 2)
+
+        # Row 1: MIDI port combo + refresh
+        gl.addWidget(QLabel("MIDI 入力:"), 1, 0)
+        self.cbMidiPort = QComboBox()
+        self.cbMidiPort.setMinimumHeight(30)
+        self.cbMidiPort.activated.connect(self._on_midi_port_picked)
+        gl.addWidget(self.cbMidiPort, 1, 1)
+        self.btnMidiRefresh = QPushButton("ポート更新")
+        self.btnMidiRefresh.setMinimumHeight(30)
+        self.btnMidiRefresh.clicked.connect(self._refresh_midi_ports)
+        gl.addWidget(self.btnMidiRefresh, 1, 2)
+
+        # Row 2: hint
+        if self.midi is None or not MidiEngine.is_available():
+            err = MidiEngine.import_error() if self.midi is not None else \
+                "MidiEngine が初期化されていません。"
+            hint_text = (
+                "⚠ MIDI 入力が利用できません: "
+                f"{err}\n"
+                "USB-MIDI を使うには `pip install mido python-rtmidi` を実行してから再起動してください。"
+            )
+        else:
+            hint_text = (
+                "USB MIDI キーボードを接続し、ポートを選んで「ピアノロール ON」を押してください。"
+                " 演出中は写真／動画は自動的に拒否され、エフェクト (CHEER 等) はピアノロールの上に半透明で重ねて表示されます。"
+            )
+        self.lblPianoHint = QLabel(hint_text)
+        self.lblPianoHint.setProperty("class", "small")
+        self.lblPianoHint.setWordWrap(True)
+        gl.addWidget(self.lblPianoHint, 2, 0, 1, 3)
+
+        # Initial population.
+        self._refresh_midi_ports(emit_log=False)
+        return box
+
+    def _compose_piano_status(self) -> str:
+        active = self.display.is_piano_mode()
+        port = self.midi.current_port() if self.midi is not None else ""
+        if active:
+            tag = "● 演出中"
+        else:
+            tag = "○ 停止中"
+        port_txt = port if port else "(未接続)"
+        return f"{tag}  /  入力: {port_txt}"
+
+    def _refresh_piano_status(self) -> None:
+        if hasattr(self, "lblPianoStatus"):
+            self.lblPianoStatus.setText(self._compose_piano_status())
+
+    def _refresh_midi_ports(self, emit_log: bool = True) -> None:
+        if not hasattr(self, "cbMidiPort"):
+            return
+        prev = self.cbMidiPort.currentData() or (
+            self.midi.current_port() if self.midi is not None else "")
+        self.cbMidiPort.blockSignals(True)
+        self.cbMidiPort.clear()
+        self.cbMidiPort.addItem("(MIDI ポートなし)", "")
+        ports: list[str] = []
+        if self.midi is not None:
+            ports = self.midi.list_ports()
+        for name in ports:
+            self.cbMidiPort.addItem(name, name)
+        # Restore prior selection if still present.
+        if prev:
+            idx = self.cbMidiPort.findData(prev)
+            if idx >= 0:
+                self.cbMidiPort.setCurrentIndex(idx)
+        self.cbMidiPort.blockSignals(False)
+        # If nothing selected and at least one real port, hint at the first.
+        if (self.cbMidiPort.currentIndex() <= 0 and ports):
+            self.cbMidiPort.setCurrentIndex(1)
+        if emit_log:
+            self._log_local("ADMIN", f"MIDI ポート一覧を更新 ({len(ports)} 件)")
+
+    def _on_midi_port_picked(self, idx: int) -> None:
+        if self.midi is None:
+            return
+        name = self.cbMidiPort.itemData(idx) or ""
+        if not name:
+            self.midi.close_port()
+            self._refresh_piano_status()
+            self._log_local("ADMIN", "MIDI ポート: 切断")
+            return
+        ok, reason = self.midi.open_port(name)
+        if ok:
+            self._log_local("ADMIN", f"MIDI ポート接続: {name}")
+        else:
+            self._log_local("ADMIN", f"MIDI ポート接続失敗: {name} ({reason})")
+            # Roll the combo back to "no port" so the operator can retry.
+            self.cbMidiPort.setCurrentIndex(0)
+        self._refresh_piano_status()
+
+    def _on_piano_toggle_clicked(self, checked: bool) -> None:
+        # Forward the new state to the display; pianoModeChanged handler
+        # synchronises bridge + button label.
+        self.display.set_piano_mode(checked)
+
+    @Slot(bool)
+    def _on_piano_mode_changed(self, on: bool) -> None:
+        # Keep the bridge in sync so /upload and /status reflect reality.
+        self.bridge.set_piano_mode(on)
+        if hasattr(self, "btnPianoMode"):
+            self.btnPianoMode.blockSignals(True)
+            self.btnPianoMode.setChecked(on)
+            self.btnPianoMode.blockSignals(False)
+            self.btnPianoMode.setText(
+                "ピアノロール ON (演出中)" if on else "ピアノロール OFF")
+            self.btnPianoMode.setProperty(
+                "class", "toggleOn" if on else "toggleOff")
+            _repolish(self.btnPianoMode)
+        self._refresh_piano_status()
+        if on:
+            self._log_local("ADMIN", "ピアノロール演出 ON (画像/動画は受付停止)")
+        else:
+            self._log_local("ADMIN", "ピアノロール演出 OFF")
 
     def _on_image_sec_changed(self, v: int) -> None:
         self.display.set_image_display_sec(int(v))
@@ -907,6 +1054,7 @@ class ControlWindow(QWidget):
         "LOCAL":        "#9c87aa",
         "ADMIN":        "#aa7f9a",
         "MY/STOP":      "#b88867",
+        "PIANO":        "#4a8fc4",
     }
 
     @Slot(str, str)
@@ -1029,6 +1177,13 @@ class ControlWindow(QWidget):
         """
         if not os.path.isfile(item.path):
             self._log_local("ADMIN", f"再生失敗: missing file {item.filename}")
+            return
+        # Piano-roll mode owns the canvas — image/video are blocked.  Audio
+        # still plays because it doesn't compete for screen real estate.
+        if self.display.is_piano_mode() and item.kind in ("image", "video"):
+            self._log_local(
+                "PIANO",
+                f"再生スキップ ({item.kind}): ピアノロール演出中  {item.filename}")
             return
         if item.kind == "image":
             ok = self.display.show_image(item.path, f"from {item.sender}", item.cid)
@@ -1217,6 +1372,9 @@ class ControlWindow(QWidget):
         self._log_local("MARQUEE/STOP", "STOP")
 
     def _open_video(self) -> None:
+        if self.display.is_piano_mode():
+            self._log_local("PIANO", "ローカル動画再生をスキップ (ピアノロール演出中)")
+            return
         path, _ = QFileDialog.getOpenFileName(
             self, "動画ファイルを選択",
             os.path.expanduser("~"),
@@ -1227,6 +1385,9 @@ class ControlWindow(QWidget):
             self._log_local("LOCAL", f"動画再生: {os.path.basename(path)}")
 
     def _open_image(self) -> None:
+        if self.display.is_piano_mode():
+            self._log_local("PIANO", "ローカル画像表示をスキップ (ピアノロール演出中)")
+            return
         path, _ = QFileDialog.getOpenFileName(
             self, "画像ファイルを選択",
             os.path.expanduser("~"),

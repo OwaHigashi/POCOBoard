@@ -23,7 +23,7 @@ from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtMultimediaWidgets import QVideoWidget
 from PySide6.QtWidgets    import QWidget
 
-from animations import ImageScene, Scene, make_scene
+from animations import ImageScene, PianoRollScene, Scene, make_scene
 from marquee    import MarqueeEngine
 
 
@@ -37,6 +37,8 @@ class DisplayWindow(QWidget):
     # stop the current background from the browser-side "自分のを取消" button.
     ownershipChanged = Signal(str, str)
     visualPlaybackStopped = Signal()
+    # Emitted whenever piano-roll mode toggles. `bool` = active.
+    pianoModeChanged = Signal(bool)
 
     def __init__(self, marquee_font: QFont, status_text_cb=None) -> None:
         super().__init__()
@@ -107,6 +109,16 @@ class DisplayWindow(QWidget):
         self._image_timer = QTimer(self)
         self._image_timer.setSingleShot(True)
         self._image_timer.timeout.connect(self._on_image_timeout)
+
+        # --- piano roll (MIDI) mode ---
+        # When True, image / video uploads are refused at the control layer
+        # (browser sees a 503 piano_mode), the keyboard + scrolling note bars
+        # cover the full window, and any FX scene is rendered translucently
+        # on top so both the roll and the FX remain visible.
+        self._piano_mode: bool = False
+        self._piano_scene: Optional[PianoRollScene] = None
+        self._piano_scroll_pps: float = 110.0
+        self._piano_fx_opacity: float = 0.55
 
     # ---------- activity tracking ----------
     def _mark_activity(self) -> None:
@@ -186,6 +198,55 @@ class DisplayWindow(QWidget):
             if self._image_display_sec > 0:
                 self._image_timer.start(self._image_display_sec * 1000)
 
+    @Slot(float)
+    def set_piano_scroll_pps(self, pps: float) -> None:
+        self._piano_scroll_pps = max(20.0, float(pps))
+        if self._piano_scene is not None:
+            self._piano_scene.scroll_pps = self._piano_scroll_pps
+
+    @Slot(float)
+    def set_piano_fx_opacity(self, opacity: float) -> None:
+        self._piano_fx_opacity = max(0.0, min(1.0, float(opacity)))
+
+    # ---------- piano roll (MIDI) mode ----------
+    def is_piano_mode(self) -> bool:
+        return self._piano_mode
+
+    @Slot(bool)
+    def set_piano_mode(self, on: bool) -> None:
+        on = bool(on)
+        if on == self._piano_mode:
+            return
+        self._piano_mode = on
+        if on:
+            # Drop visual backgrounds — the piano roll covers the whole window.
+            self._stop_video_internal()
+            self._clear_image_internal()
+            self._piano_scene = PianoRollScene(
+                max(1, self.width()), max(1, self.height()),
+                scroll_pps=self._piano_scroll_pps)
+            self._mark_activity()
+        else:
+            # Release every held note and drop the scene.
+            if self._piano_scene is not None:
+                self._piano_scene.all_off()
+            self._piano_scene = None
+        self.pianoModeChanged.emit(on)
+        self.update()
+
+    @Slot(int, int)
+    def piano_note_on(self, note: int, velocity: int) -> None:
+        if not self._piano_mode or self._piano_scene is None:
+            return
+        self._piano_scene.note_on(int(note), int(velocity))
+        self._mark_activity()
+
+    @Slot(int)
+    def piano_note_off(self, note: int) -> None:
+        if not self._piano_mode or self._piano_scene is None:
+            return
+        self._piano_scene.note_off(int(note))
+
     @Slot(int)
     def set_media_min_play_sec(self, sec: int) -> None:
         """Set the minimum playback duration for videos (and audio files).
@@ -244,7 +305,10 @@ class DisplayWindow(QWidget):
 
         Returns True if the image loaded and was installed, False if the
         file could not be decoded (any prior background is left untouched).
+        Refuses while piano-roll mode is active (returns False).
         """
+        if self._piano_mode:
+            return False
         pm = QPixmap(path)
         if pm.isNull():
             return False
@@ -278,7 +342,11 @@ class DisplayWindow(QWidget):
     def play_video(self, path: str, owner: str = "") -> None:
         """Play a video as the background, then stop at first natural end
         past `media_min_play_sec` (see _on_video_status).
+
+        No-op while piano-roll mode is active.
         """
+        if self._piano_mode:
+            return
         self._ensure_video_widgets()
         assert self._video_widget and self._video_player
         # Clear any image background (and cancel its auto-clear timer); FX
@@ -365,6 +433,8 @@ class DisplayWindow(QWidget):
         super().resizeEvent(ev)
         if self._video_widget is not None and self._video_widget.isVisible():
             self._video_widget.setGeometry(0, 0, self.width(), self.height())
+        if self._piano_scene is not None:
+            self._piano_scene.resize(max(1, self.width()), max(1, self.height()))
 
     def toggle_fullscreen(self) -> None:
         if self.isFullScreen():
@@ -408,6 +478,8 @@ class DisplayWindow(QWidget):
         if self._scene is not None:
             if not self._scene.update(dt_ms):
                 self._scene = None
+        if self._piano_scene is not None:
+            self._piano_scene.update(dt_ms)
         if self._marquee.tracks:
             self._marquee.step(dt_ms)
             self._emit_marquee_status()
@@ -438,12 +510,19 @@ class DisplayWindow(QWidget):
         #        erase each new frame).
         #   3. Idle title, if in the long-idle "welcome" state AND no
         #      other visual is present
-        #   4. FX scene (opaque; covers background for its duration)
-        #   5. Marquee tracks — always on top of everything visual
+        #   4. Piano-roll scene (opaque; replaces all visual backgrounds
+        #      while piano-mode is active)
+        #   5. FX scene (opaque normally; rendered translucent when stacked
+        #      on a video or piano-roll backdrop so both stay readable)
+        #   6. Marquee tracks — always on top of everything visual
         has_video = self._video_active and self._video_widget is not None \
                     and self._video_widget.isVisible()
 
-        if not has_video:
+        if self._piano_mode and self._piano_scene is not None:
+            # Piano-roll fills the frame; image/video backgrounds are
+            # suppressed while this mode is on (set_piano_mode clears them).
+            self._piano_scene.draw(p, w, h)
+        elif not has_video:
             if self._bg_image is not None and not self._bg_image.isNull():
                 p.fillRect(0, 0, w, h, Qt.GlobalColor.black)
                 self._draw_bg_image(p, w, h)
@@ -454,10 +533,15 @@ class DisplayWindow(QWidget):
                 p.fillRect(0, 0, w, h, Qt.GlobalColor.black)
 
         if self._scene is not None and self._scene.alive:
-            # FX covers the whole frame. For video backgrounds we render the
-            # scene translucently, so the video stays visible underneath
-            # the BOMB/CHEER spark storm — matches the "effect on top" spec.
-            if has_video:
+            # FX covers the whole frame. For video / piano-roll backgrounds
+            # we render the scene translucently so the underlying visuals
+            # stay readable through the BOMB / CHEER spark storm — matches
+            # the "effect on top, semi-transparent" spec.
+            if self._piano_mode:
+                p.setOpacity(self._piano_fx_opacity)
+                self._scene.draw(p, w, h)
+                p.setOpacity(1.0)
+            elif has_video:
                 p.setOpacity(0.75)
                 self._scene.draw(p, w, h)
                 p.setOpacity(1.0)
