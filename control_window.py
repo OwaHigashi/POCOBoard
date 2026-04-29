@@ -461,13 +461,25 @@ class ControlWindow(QWidget):
 
         self.setWindowTitle("POCOBoard — Control")
         self.setStyleSheet(_QSS)
-        self.setFixedSize(820, 880)
+        # Was setFixedSize(820, 880).  After the piano-roll panel was
+        # added the 表示 tab's preferred height grew past 880, and on
+        # Windows 11 the fixed-size constraint applied before the layout
+        # had finished settling caused the window to render short at
+        # startup — only a WM_MOVE later forced a re-layout that
+        # re-exposed the bottom rows.  Use a soft minimum + sizeHint-
+        # driven resize after build instead so the layout always wins.
+        self.setMinimumSize(820, 720)
         self.setWindowFlag(Qt.WindowType.WindowMaximizeButtonHint, False)
 
         self._http_host = "0.0.0.0"
         self._http_port = 8080
 
         self._build_ui()
+        # Snap to whatever the layout actually needs (at least the legacy
+        # 820 x 880 footprint, so existing operators don't see a smaller
+        # window on hosts where nothing demands extra height).
+        hint = self.sizeHint()
+        self.resize(max(820, hint.width()), max(880, hint.height()))
 
         self._status_timer = QTimer(self)
         self._status_timer.setInterval(1000)
