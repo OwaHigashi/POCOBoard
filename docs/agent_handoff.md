@@ -1,6 +1,6 @@
 # Agent Handoff
 
-Updated: 2026-04-30 (piano-mode lets photos / videos overlay translucently)
+Updated: 2026-04-30 (piano-mode MIDI stability hardening)
 
 ## Summary
 
@@ -513,4 +513,93 @@ can dial it back up via `piano_image_opacity_pct` /
   layers visible together: bars + lit keys at the keyboard, photo
   ghosted above, CHEER spotlight cones + confetti overlaid, marquee
   scrolling at the top.
+
+## Piano-mode MIDI stability hardening (2026-04-30, late)
+
+User report: "ノートが表示されない (MIDI を受け取っても何も表示
+されない) ので、再起動したら直った". The "restart fixes it"
+signature pinned the bug to in-process state; "他は何も変わって
+いません" ruled out OS / driver / hardware. Two root-cause classes
+fit and both are now defended against.
+
+### 1. Cross-thread signal could race the paintEvent (most likely culprit)
+
+`MidiEngine._on_msg` runs on a winmm worker thread; `noteOn` /
+`noteOff` were connected with the default `Qt::AutoConnection`. Auto
+re-detects per emit, and *should* always fall through to
+`QueuedConnection` here, but if PySide6 ever mis-detected the calling
+thread the slot would run on the worker thread itself — modifying
+`PianoRollScene._active` concurrently with `paintEvent`'s
+`for note, d in self._active.items()` iteration. That throws
+`RuntimeError: dictionary changed size during iteration`, which
+PySide6 logs to stderr but doesn't propagate, leaving the scene in a
+weird state where new note-ons never seem to draw until the app is
+restarted (= scene re-built fresh).
+
+Defenses (belt + suspenders + airbag):
+- `pocoboard.py` now passes `Qt.ConnectionType.QueuedConnection`
+  explicitly on both `midi.noteOn → display.piano_note_on` and
+  `midi.noteOff → display.piano_note_off`. No more reliance on Qt
+  thread auto-detection for safety-critical paths.
+- `display_window.piano_note_on` / `piano_note_off` /
+  `_tick → piano_scene.update` wrap the scene call in `try/except` and
+  print to stderr on failure. Even if a single bad event blows up,
+  the meta-call queue keeps draining and subsequent ticks paint
+  normally.
+- `PianoRollScene._draw_notes` iterates `list(self._active.items())`
+  and `list(self._completed)` instead of the live containers — costs
+  nothing and makes any future "callback ran on the wrong thread"
+  bug a no-op rather than a freeze.
+
+### 2. Auto-selected MIDI port in the combo wasn't actually opened
+
+`_refresh_midi_ports` (called every time the piano panel mounts and
+on every `ポート更新` click) used to do
+`self.cbMidiPort.setCurrentIndex(1)` to pre-select the first real
+port for the operator's convenience — but `setCurrentIndex` does
+NOT fire `activated`, which was the only signal we listened to. So
+the combo *displayed* the Roland port name while `midiInOpen` was
+never called, and the operator naturally assumed "ポート名出てる →
+繋がってる". Pressing piano-mode ON then yielded zero notes; the
+restart "fixed" it because the combo + manual click sequence
+happened to differ on the second run.
+
+Fixes:
+- Connection switched to `currentIndexChanged` (fires for both user
+  clicks AND programmatic `setCurrentIndex` outside `blockSignals`).
+- `_refresh_midi_ports` now drives `_open_midi_port(target)`
+  itself for the auto-select path (the populate is wrapped in
+  `blockSignals(True)` so we have explicit control over when open
+  fires).
+- New `_open_midi_port` helper centralises open + log + combo-rollback
+  on failure. `_on_midi_port_picked` now skips when the picked port
+  already matches the currently open one — avoids needless close /
+  reopen cycles when the operator presses 「ポート更新」 while a
+  port is already live.
+
+### 3. Diagnostics so the next failure is loud, not silent
+
+- `MidiEngine.firstNoteSeen` (str) signal — emitted exactly once per
+  port-open the first time a note message arrives. The control
+  window logs `MIDI 受信開始: <port> から最初のノート` to the PIANO
+  channel. Operators (and future agents) can see at a glance whether
+  events are flowing.
+- `_compose_piano_status` tints the status pill RED with text
+  `⚠ MIDI 未接続  ←  下のコンボでポートを選択してください` whenever
+  piano-mode is ON but no port is open. Catches the "everything
+  ready but nothing happens" trap visually.
+- `MidiEngine.portChanged` is now wired into `_refresh_piano_status`
+  so the pill stays in sync if anything else opens / closes the port.
+
+### Verification
+
+- `python -m py_compile` — clean.
+- `cache/test_midi_stability.py` queues ~1300 random
+  `piano_note_on` / `piano_note_off` invocations from a worker
+  thread (via `QMetaObject.invokeMethod`
+  + `Qt.ConnectionType.QueuedConnection`) over 2 s while the Qt
+  event loop drains them. End state: 940 on / 350 off processed,
+  scene `_active`=63 / `_completed`=877, no crash, no exception
+  printed. Confirms the defensive `list()` snapshot + try/except
+  hold up under real concurrency.
 

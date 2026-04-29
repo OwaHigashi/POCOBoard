@@ -111,6 +111,10 @@ class MidiEngine(QObject):
     noteOn      = Signal(int, int)   # (midi note 0..127, velocity 1..127)
     noteOff     = Signal(int)        # (midi note)
     portChanged = Signal(str)        # currently open port name ("" = closed)
+    # Fired exactly once per port-open the first time a note message
+    # arrives.  Lets the control window prove "events are flowing"
+    # without spamming the log on every keypress.
+    firstNoteSeen = Signal(str)      # (port name)
 
     def __init__(self) -> None:
         super().__init__()
@@ -118,6 +122,7 @@ class MidiEngine(QObject):
         self._handle = c_void_p()
         self._open = False
         self._port_name = ""
+        self._first_note_seen = False
         # Hold the WINFUNCTYPE callback for the engine's lifetime — see
         # module docstring for why this matters.
         self._cb = _MIDIINPROC(self._on_msg)
@@ -188,6 +193,7 @@ class MidiEngine(QObject):
             self._handle = h
             self._open = True
             self._port_name = name
+            self._first_note_seen = False
         self.portChanged.emit(name)
         return True, "ok"
 
@@ -229,9 +235,21 @@ class MidiEngine(QObject):
         cmd = status & 0xF0
         if cmd == 0x90:        # Note On (velocity 0 = note off, running status)
             if data2 > 0:
+                self._maybe_emit_first_note()
                 self.noteOn.emit(data1, data2)
             else:
                 self.noteOff.emit(data1)
         elif cmd == 0x80:      # Note Off
             self.noteOff.emit(data1)
         # Channel/CC/pitch-bend events are intentionally ignored.
+
+    def _maybe_emit_first_note(self) -> None:
+        # Race-tolerant single-shot: under the lock, swap the flag from
+        # False → True and capture the port name.  Then emit the signal
+        # outside the lock so a slow slot can't deadlock the callback.
+        with self._lock:
+            if self._first_note_seen:
+                return
+            self._first_note_seen = True
+            name = self._port_name
+        self.firstNoteSeen.emit(name)

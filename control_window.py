@@ -839,12 +839,23 @@ class ControlWindow(QWidget):
         gl.addWidget(QLabel("MIDI 入力:"), 1, 0)
         self.cbMidiPort = QComboBox()
         self.cbMidiPort.setMinimumHeight(30)
-        self.cbMidiPort.activated.connect(self._on_midi_port_picked)
+        # currentIndexChanged (not activated) so programmatic auto-select
+        # also drives _on_midi_port_picked — otherwise the combo can show
+        # the user's port name without ever calling midiInOpen and the
+        # operator wonders why notes don't appear.
+        self.cbMidiPort.currentIndexChanged.connect(self._on_midi_port_picked)
         gl.addWidget(self.cbMidiPort, 1, 1)
         self.btnMidiRefresh = QPushButton("ポート更新")
         self.btnMidiRefresh.setMinimumHeight(30)
         self.btnMidiRefresh.clicked.connect(self._refresh_midi_ports)
         gl.addWidget(self.btnMidiRefresh, 1, 2)
+
+        # Wire MidiEngine's first-note signal so the operator can confirm
+        # MIDI events are actually flowing (the most common silent
+        # failure mode is "port shows open but no events arrive").
+        if self.midi is not None:
+            self.midi.firstNoteSeen.connect(self._on_first_midi_note)
+            self.midi.portChanged.connect(self._on_midi_port_changed)
 
         # Row 2: hint
         if self.midi is None or not MidiEngine.is_available():
@@ -880,18 +891,37 @@ class ControlWindow(QWidget):
             tag = "● 演出中"
         else:
             tag = "○ 停止中"
-        port_txt = port if port else "(未接続)"
-        return f"{tag}  /  入力: {port_txt}"
+        if port:
+            return f"{tag}  /  入力: {port}"
+        # No MIDI port open.  When piano-mode is ALSO on, this is the
+        # exact "everything ready but nothing happens" trap — surface it
+        # loudly so the operator notices instead of wondering why no
+        # notes appear.
+        if active:
+            return f"{tag}  /  ⚠ MIDI 未接続  ←  下のコンボでポートを選択してください"
+        return f"{tag}  /  入力: (未接続)"
 
     def _refresh_piano_status(self) -> None:
-        if hasattr(self, "lblPianoStatus"):
-            self.lblPianoStatus.setText(self._compose_piano_status())
+        if not hasattr(self, "lblPianoStatus"):
+            return
+        self.lblPianoStatus.setText(self._compose_piano_status())
+        # Tint red when the operator is in the "演出中 + 未接続" trap so
+        # the warning visually pops out of the bright pastel theme.
+        warn = (self.display.is_piano_mode() and self.midi is not None
+                and not self.midi.current_port())
+        self.lblPianoStatus.setStyleSheet(
+            "background:#fbecea; border:1px solid #d6948a; color:#7a2a1a;"
+            "border-radius:14px; padding:10px 12px; font-weight:800;"
+            if warn else ""
+        )
 
     def _refresh_midi_ports(self, emit_log: bool = True) -> None:
         if not hasattr(self, "cbMidiPort"):
             return
         prev = self.cbMidiPort.currentData() or (
             self.midi.current_port() if self.midi is not None else "")
+        # Block currentIndexChanged during populate; we drive any open
+        # explicitly below so we can also handle the auto-pick path.
         self.cbMidiPort.blockSignals(True)
         self.cbMidiPort.clear()
         self.cbMidiPort.addItem("(MIDI ポートなし)", "")
@@ -900,34 +930,73 @@ class ControlWindow(QWidget):
             ports = self.midi.list_ports()
         for name in ports:
             self.cbMidiPort.addItem(name, name)
-        # Restore prior selection if still present.
+        # Decide which row to land on.
+        target_idx = -1
         if prev:
-            idx = self.cbMidiPort.findData(prev)
-            if idx >= 0:
-                self.cbMidiPort.setCurrentIndex(idx)
+            target_idx = self.cbMidiPort.findData(prev)
+        if target_idx < 0 and ports:
+            # Auto-pick the first real port — but ONLY when there isn't
+            # already a port open (we don't want to yank a working port
+            # just because the user pressed 「ポート更新」).
+            if self.midi is None or not self.midi.current_port():
+                target_idx = 1
+        if target_idx >= 0:
+            self.cbMidiPort.setCurrentIndex(target_idx)
         self.cbMidiPort.blockSignals(False)
-        # If nothing selected and at least one real port, hint at the first.
-        if (self.cbMidiPort.currentIndex() <= 0 and ports):
-            self.cbMidiPort.setCurrentIndex(1)
+        # NOW open the port if it differs from what's currently open.
+        # `setCurrentIndex` above did NOT fire currentIndexChanged
+        # because we held blockSignals(True), so we drive open here.
+        if target_idx > 0:
+            target_name = self.cbMidiPort.itemData(target_idx) or ""
+            cur = self.midi.current_port() if self.midi is not None else ""
+            if target_name and target_name != cur:
+                self._open_midi_port(target_name)
         if emit_log:
             self._log_local("ADMIN", f"MIDI ポート一覧を更新 ({len(ports)} 件)")
+        self._refresh_piano_status()
 
     def _on_midi_port_picked(self, idx: int) -> None:
-        if self.midi is None:
+        # currentIndexChanged fires for both user clicks and our own
+        # programmatic setCurrentIndex outside blockSignals.  In the
+        # programmatic path _refresh_midi_ports already calls
+        # _open_midi_port itself, so re-entering here on the same port
+        # is wasteful — guard with a "current port matches?" check.
+        if self.midi is None or not hasattr(self, "cbMidiPort"):
             return
         name = self.cbMidiPort.itemData(idx) or ""
+        cur = self.midi.current_port()
+        if name == cur:
+            return
         if not name:
             self.midi.close_port()
             self._refresh_piano_status()
             self._log_local("ADMIN", "MIDI ポート: 切断")
             return
+        self._open_midi_port(name)
+
+    def _open_midi_port(self, name: str) -> None:
+        if self.midi is None:
+            return
         ok, reason = self.midi.open_port(name)
         if ok:
-            self._log_local("ADMIN", f"MIDI ポート接続: {name}")
+            self._log_local("PIANO", f"MIDI ポート接続: {name}")
         else:
-            self._log_local("ADMIN", f"MIDI ポート接続失敗: {name} ({reason})")
-            # Roll the combo back to "no port" so the operator can retry.
+            self._log_local("PIANO", f"MIDI ポート接続失敗: {name} ({reason})")
+            # Roll the combo back so the operator can retry without
+            # having to reselect the failing port first.
+            self.cbMidiPort.blockSignals(True)
             self.cbMidiPort.setCurrentIndex(0)
+            self.cbMidiPort.blockSignals(False)
+        self._refresh_piano_status()
+
+    @Slot(str)
+    def _on_first_midi_note(self, port: str) -> None:
+        """Confirms MIDI events are actually flowing through the engine."""
+        self._log_local("PIANO", f"MIDI 受信開始: {port} から最初のノート")
+
+    @Slot(str)
+    def _on_midi_port_changed(self, port: str) -> None:
+        """Keep the status pill in sync if anything else opens / closes."""
         self._refresh_piano_status()
 
     def _on_piano_toggle_clicked(self, checked: bool) -> None:

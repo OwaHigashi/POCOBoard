@@ -1863,13 +1863,19 @@ class PianoRollScene(Scene):
         bars: list[tuple[bool, int, float, float, int, bool]] = []
         # Tuple: (is_white, note, top_y, bottom_y, vel, is_held)
         now_ms = self._now_ms
-        for note, d in self._active.items():
+        # Snapshot via list(...) so a concurrent note-on/off event posted
+        # to the main thread between paintEvents can't mutate the dict
+        # mid-iteration.  Belt-and-suspenders: signals are already
+        # forced to QueuedConnection (see pocoboard.py), but this
+        # extra copy costs nothing and rules out the failure mode
+        # entirely.
+        for note, d in list(self._active.items()):
             held_ms = max(0.0, now_ms - d["start_ms"])
             top_y = kb_top - (held_ms / 1000.0) * pps
             top_y = max(-20.0, top_y)
             is_white = self._note_meta[note][0]
             bars.append((is_white, note, top_y, kb_top, d["vel"], True))
-        for d in self._completed:
+        for d in list(self._completed):
             note = d["note"]
             elapsed_since_off = max(0.0, now_ms - d["end_ms"])
             duration_ms = max(0.0, d["end_ms"] - d["start_ms"])

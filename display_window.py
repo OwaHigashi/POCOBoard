@@ -255,14 +255,26 @@ class DisplayWindow(QWidget):
     def piano_note_on(self, note: int, velocity: int) -> None:
         if not self._piano_mode or self._piano_scene is None:
             return
-        self._piano_scene.note_on(int(note), int(velocity))
-        self._mark_activity()
+        # Defensive: if a single note event ever throws (corrupt scene
+        # state, surprise edge case), swallow it so the next paintEvent
+        # still runs.  Without this, an exception inside the slot can
+        # propagate up through Qt and quietly stop the meta-call queue
+        # for the rest of the session — exactly the "MIDI 来てるのに
+        # 何も出ない、再起動で直る" symptom the user reported.
+        try:
+            self._piano_scene.note_on(int(note), int(velocity))
+            self._mark_activity()
+        except Exception as exc:
+            print(f"[piano] note_on({note},{velocity}) failed: {exc!r}")
 
     @Slot(int)
     def piano_note_off(self, note: int) -> None:
         if not self._piano_mode or self._piano_scene is None:
             return
-        self._piano_scene.note_off(int(note))
+        try:
+            self._piano_scene.note_off(int(note))
+        except Exception as exc:
+            print(f"[piano] note_off({note}) failed: {exc!r}")
 
     @Slot(int)
     def set_media_min_play_sec(self, sec: int) -> None:
@@ -513,7 +525,12 @@ class DisplayWindow(QWidget):
             if not self._scene.update(dt_ms):
                 self._scene = None
         if self._piano_scene is not None:
-            self._piano_scene.update(dt_ms)
+            try:
+                self._piano_scene.update(dt_ms)
+            except Exception as exc:
+                # Same defensive philosophy as the note-on slot — never
+                # let a bad frame stop subsequent ticks.
+                print(f"[piano] scene.update failed: {exc!r}")
         if self._marquee.tracks:
             self._marquee.step(dt_ms)
             self._emit_marquee_status()
