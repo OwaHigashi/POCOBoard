@@ -156,8 +156,17 @@ def main() -> int:
     else:
         ports = midi.list_ports()
         print(f"[pocoboard] MIDI ports: {ports if ports else '(none)'}")
-    midi.noteOn.connect(display.piano_note_on)
-    midi.noteOff.connect(display.piano_note_off)
+    # IMPORTANT: force QueuedConnection.  These signals are emitted from
+    # the winmm worker thread (callback registered via midiInOpen with
+    # CALLBACK_FUNCTION).  Qt::AutoConnection should detect the cross-
+    # thread emit and queue automatically, but if that detection ever
+    # mis-fires the slot would run on the worker thread and modify
+    # PianoRollScene._active concurrently with paintEvent's iteration —
+    # producing a "dictionary changed size during iteration" crash that
+    # silently freezes new note rendering until the app restarts.
+    # Pinning the connection type removes any chance of that happening.
+    midi.noteOn.connect(display.piano_note_on,  Qt.ConnectionType.QueuedConnection)
+    midi.noteOff.connect(display.piano_note_off, Qt.ConnectionType.QueuedConnection)
 
     screens = QGuiApplication.screens()
     n = max(1, len(screens))
