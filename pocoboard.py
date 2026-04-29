@@ -175,10 +175,17 @@ def main() -> int:
         ctrl.btnFullscreen.setText("全画面解除 (F11)")
 
     # Anchor control window on the chosen control screen, centered.
+    # If the window is taller than the available area (small monitor +
+    # piano-roll panel makes the panel ~1080 px tall), shrink it first
+    # to fit so we never push the title bar above the screen edge.
     if screens:
         cg = screens[ctrl_screen].availableGeometry()
-        ctrl.move(cg.x() + (cg.width() - ctrl.width()) // 2,
-                  cg.y() + max(40, (cg.height() - ctrl.height()) // 2))
+        cw = min(ctrl.width(),  cg.width())
+        ch = min(ctrl.height(), cg.height())
+        if cw != ctrl.width() or ch != ctrl.height():
+            ctrl.resize(cw, ch)
+        ctrl.move(cg.x() + max(0, (cg.width()  - cw) // 2),
+                  cg.y() + max(0, (cg.height() - ch) // 2))
     ctrl.show()
 
     # ----- signal wiring (bridge → display / audio / log) -----
