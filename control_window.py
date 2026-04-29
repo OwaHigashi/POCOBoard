@@ -841,11 +841,13 @@ class ControlWindow(QWidget):
             hint_text = (
                 "⚠ MIDI 入力が利用できません: "
                 f"{err}\n"
-                "USB-MIDI を使うには `pip install mido python-rtmidi` を実行してから再起動してください。"
+                "POCOBoard は Windows の winmm.dll を直接使うので追加 pip 依存はありません。"
+                "それでもこの表示が出る場合はサポートまでご連絡ください。"
             )
         else:
             hint_text = (
-                "USB MIDI キーボードを接続し、ポートを選んで「ピアノロール ON」を押してください。"
+                "USB MIDI キーボードを接続し、「ポート更新」→「MIDI 入力:」でポートを選び、"
+                "「ピアノロール ON」を押してください。"
                 " 演出中は写真／動画は自動的に拒否され、エフェクト (CHEER 等) はピアノロールの上に半透明で重ねて表示されます。"
             )
         self.lblPianoHint = QLabel(hint_text)

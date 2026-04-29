@@ -1,6 +1,6 @@
 # Agent Handoff
 
-Updated: 2026-04-29 (USB MIDI piano-roll演出 added)
+Updated: 2026-04-30 (MIDI backend → winmm ctypes; mido / python-rtmidi removed)
 
 ## Summary
 
@@ -358,4 +358,81 @@ so both stay visible.
   hardware, no `mido` installed) prints
   `[pocoboard] MIDI: unavailable (ModuleNotFoundError: No module named 'mido')`
   and otherwise starts normally.
+
+## MIDI backend swap → winmm ctypes (2026-04-30)
+
+`mido` + `python-rtmidi` was killed off because the install story was
+unworkable in the field:
+
+- The deploy host runs Python 3.14 (Microsoft Store build).
+- `python-rtmidi` 1.5.8 is a C++ extension and **has no Python 3.14
+  wheel on PyPI**, so pip falls through to building from source via
+  meson.
+- The host doesn't have Visual Studio (no `cl.exe`, no `vswhere.exe`),
+  so meson can't find a C++ compiler and aborts with
+  `ERROR: Unknown compiler(s): [['icl'], ['cl'], ...]`.
+- The user's `install-deps.bat` therefore failed at the `mido`/`rtmidi`
+  step, leaving piano-roll mode without any MIDI input.
+
+POCOBoard targets Windows only, so we now call **`winmm.dll` directly
+through `ctypes`** — no third-party Python packages, no compiler, no
+deployment step.
+
+### `midi_engine.py` rewrite
+
+- Imports `ctypes` + `wintypes` only; no `mido`, no `rtmidi` references.
+- `_bind_winmm()` resolves `winmm.dll` and locks down argtypes/restypes
+  for `midiInGetNumDevs`, `midiInGetDevCapsW`, `midiInOpen`,
+  `midiInStart`, `midiInStop`, `midiInReset`, `midiInClose`. Setting
+  these matters on 64-bit Windows so pointer-sized args (`DWORD_PTR`,
+  `HMIDIIN`) don't get truncated to 32 bits.
+- `_MIDIINPROC = WINFUNCTYPE(None, c_void_p, c_uint, c_size_t,
+  c_size_t, c_size_t)` matches the Win32 callback signature
+  `void CALLBACK MidiInProc(HMIDIIN, UINT, DWORD_PTR, DWORD_PTR, DWORD_PTR)`.
+  ctypes acquires the GIL on entry, so emitting Qt signals from inside
+  the callback is safe.
+- The `_cb` ctypes wrapper is held on `self` for the engine's
+  lifetime — letting Python GC it would dangle a function pointer in
+  winmm and crash on the next event.
+- `list_ports()` walks `midiInGetNumDevs()` and uses the Unicode-W
+  variant of `midiInGetDevCapsW` so non-ASCII Roland / Yamaha device
+  names round-trip correctly.
+- `open_port(name)` resolves name → device index, calls `midiInOpen`
+  with `CALLBACK_FUNCTION (0x00030000)` then `midiInStart`.
+  `close_port()` follows Win32 etiquette: stop → reset → close
+  (skipping any of those leaves the device in `MMSYSERR_ALLOCATED` for
+  the next reopen attempt).
+- `MIM_DATA` short messages have the 3-byte payload packed into
+  `dwParam1`'s low 24 bits — split into `status / data1 / data2`,
+  treat `0x9X` with vel>0 as Note-On, vel=0 as Note-Off (running
+  status), and `0x8X` as Note-Off.  Everything else (CC, pitch bend,
+  SysEx, MIM_OPEN/CLOSE/ERROR) is ignored.
+
+### Public API unchanged
+
+`MidiEngine.is_available() / import_error() / list_ports() /
+current_port() / open_port() / close_port()` and the Qt signals
+(`noteOn(int,int)`, `noteOff(int)`, `portChanged(str)`) all kept the
+same shape, so `display_window.py` / `control_window.py` /
+`pocoboard.py` did not need any changes beyond the hint text update in
+the control panel.
+
+### Install / docs
+
+- `install-deps.bat` no longer attempts to install `mido` or
+  `python-rtmidi`.  Only PySide6 is installed.
+- The "🎹 ピアノロール (USB MIDI)" panel hint now says "POCOBoard は
+  Windows の winmm.dll を直接使うので追加 pip 依存はありません" so the
+  operator never sees a stale "pip install mido" instruction.
+
+### Verification
+
+- `python -m py_compile midi_engine.py ...` — clean.
+- `MidiEngine.is_available()` returns True on Windows immediately, no
+  install needed.
+- Boot of `pocoboard.py --no-fullscreen` shows `MIDI ports: (none)` on
+  a host with no MIDI hardware (instead of the previous "unavailable
+  (ModuleNotFoundError)").  When a USB-MIDI interface is plugged in,
+  the same boot line will show its name and the control panel's combo
+  populates from `list_ports()`.
 
