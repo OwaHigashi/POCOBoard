@@ -87,8 +87,10 @@ def main() -> int:
     #                     have played, then stop at the next natural end (0 = play once).
     image_sec    = cfg.get_int("image_display_sec", 180)
     min_play_sec = cfg.get_int("media_min_play_sec", 60)
-    piano_pps    = cfg.get_int("piano_scroll_pps", 110)
-    piano_fx_op  = cfg.get_int("piano_fx_opacity_pct", 55)
+    piano_pps     = cfg.get_int("piano_scroll_pps", 110)
+    piano_fx_op   = cfg.get_int("piano_fx_opacity_pct", 55)
+    piano_img_op  = cfg.get_int("piano_image_opacity_pct", 35)
+    piano_vid_op  = cfg.get_int("piano_video_opacity_pct", 35)
 
     disp_screen_cfg = (args.display_screen
                        if args.display_screen is not None
@@ -143,6 +145,8 @@ def main() -> int:
     display.set_media_min_play_sec(min_play_sec)
     display.set_piano_scroll_pps(float(piano_pps))
     display.set_piano_fx_opacity(max(0, min(100, piano_fx_op)) / 100.0)
+    display.set_piano_image_opacity(max(0, min(100, piano_img_op)) / 100.0)
+    display.set_piano_video_opacity(max(0, min(100, piano_vid_op)) / 100.0)
     audio.set_media_min_play_sec(min_play_sec)
 
     # USB MIDI input (optional — degrades gracefully when mido is missing).

@@ -501,9 +501,10 @@ class _Handler(BaseHTTPRequestHandler):
                             "max":  snap["marquee_max"]},
                 "me":   {"id": cid, "name": name, "allowed": allowed},
                 "mine": mine,
-                # piano_mode: when true, image/video uploads are refused
-                # (server returns 503 piano_mode).  The browser UI uses
-                # this to grey out the corresponding buttons.
+                # piano_mode is informational only — uploads are no
+                # longer rejected; the browser uses this to surface a
+                # tiny "🎹 演出中" hint so users know their photo /
+                # video will appear translucently on top of the keyboard.
                 "piano_mode": self.bridge.is_piano_mode(),
             }, set_cookie=new_cookie)
             return
@@ -703,16 +704,10 @@ class _Handler(BaseHTTPRequestHandler):
                 self._send_json(400, {"ok": False, "reason": "bad_type"},
                                 set_cookie=new_cookie)
                 return
-            # Piano-roll mode locks out image / video uploads — the display
-            # is fully owned by the keyboard / scrolling-note view.  Audio
-            # is still allowed because it doesn't compete for the canvas.
-            if kind in ("image", "video") and self.bridge.is_piano_mode():
-                self.bridge.emit_log(
-                    "UPLOAD",
-                    f"{now_hms}  {label:24s}  UPLOAD    X piano_mode ({kind})")
-                self._send_json(503, {"ok": False, "reason": "piano_mode"},
-                                set_cookie=new_cookie)
-                return
+            # NOTE: piano-roll mode no longer rejects image / video uploads.
+            # The display composites them as semi-transparent overlays on
+            # top of the keyboard scene, so all four layers (roll +
+            # image/video + FX + marquee) stay readable together.
             raw_name = query.get("filename", ["upload"])[0]
             safe_name = _sanitize_filename(raw_name, kind)
             # Build a disk path that includes timestamp + random token so

@@ -860,7 +860,9 @@ class ControlWindow(QWidget):
             hint_text = (
                 "USB MIDI キーボードを接続し、「ポート更新」→「MIDI 入力:」でポートを選び、"
                 "「ピアノロール ON」を押してください。"
-                " 演出中は写真／動画は自動的に拒否され、エフェクト (CHEER 等) はピアノロールの上に半透明で重ねて表示されます。"
+                " 演出中も写真・動画・エフェクト (CHEER 等) はそのまま受付され、"
+                "鍵盤ロールの上に半透明で重ねて同時表示されます。"
+                "（不透明度は config.ini の piano_image_opacity_pct / piano_video_opacity_pct / piano_fx_opacity_pct で調整可）"
             )
         self.lblPianoHint = QLabel(hint_text)
         self.lblPianoHint.setProperty("class", "small")
@@ -948,7 +950,7 @@ class ControlWindow(QWidget):
             _repolish(self.btnPianoMode)
         self._refresh_piano_status()
         if on:
-            self._log_local("ADMIN", "ピアノロール演出 ON (画像/動画は受付停止)")
+            self._log_local("ADMIN", "ピアノロール演出 ON (写真/動画/FX は半透明オーバレイ)")
         else:
             self._log_local("ADMIN", "ピアノロール演出 OFF")
 
@@ -1192,13 +1194,6 @@ class ControlWindow(QWidget):
         if not os.path.isfile(item.path):
             self._log_local("ADMIN", f"再生失敗: missing file {item.filename}")
             return
-        # Piano-roll mode owns the canvas — image/video are blocked.  Audio
-        # still plays because it doesn't compete for screen real estate.
-        if self.display.is_piano_mode() and item.kind in ("image", "video"):
-            self._log_local(
-                "PIANO",
-                f"再生スキップ ({item.kind}): ピアノロール演出中  {item.filename}")
-            return
         if item.kind == "image":
             ok = self.display.show_image(item.path, f"from {item.sender}", item.cid)
             if not ok:
@@ -1386,9 +1381,6 @@ class ControlWindow(QWidget):
         self._log_local("MARQUEE/STOP", "STOP")
 
     def _open_video(self) -> None:
-        if self.display.is_piano_mode():
-            self._log_local("PIANO", "ローカル動画再生をスキップ (ピアノロール演出中)")
-            return
         path, _ = QFileDialog.getOpenFileName(
             self, "動画ファイルを選択",
             os.path.expanduser("~"),
@@ -1399,9 +1391,6 @@ class ControlWindow(QWidget):
             self._log_local("LOCAL", f"動画再生: {os.path.basename(path)}")
 
     def _open_image(self) -> None:
-        if self.display.is_piano_mode():
-            self._log_local("PIANO", "ローカル画像表示をスキップ (ピアノロール演出中)")
-            return
         path, _ = QFileDialog.getOpenFileName(
             self, "画像ファイルを選択",
             os.path.expanduser("~"),

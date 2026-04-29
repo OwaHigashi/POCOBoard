@@ -343,26 +343,19 @@ INDEX_HTML = r"""<!doctype html>
   .upload-btn.video { background: linear-gradient(160deg, #e9e1eb, #ddd3e0); }
   .upload-btn.audio { background: linear-gradient(160deg, #e5ece6, #dbe4dc); }
   .upload-btn.uploading { opacity: .5; pointer-events: none; }
-  .upload-btn.locked {
-    opacity: .45;
-    cursor: not-allowed;
-    pointer-events: none;
-    background: linear-gradient(160deg, #ece2da, #ddd0c4);
-    color: #6d6258;
-  }
-  .upload-locked-note {
+  .piano-overlay-note {
     flex-basis: 100%;
     margin-top: 4px;
     padding: 8px 12px;
     border-radius: 12px;
-    background: #f6e9d6;
-    border: 1px solid #d8c190;
-    color: #5d4818;
+    background: #eaf2f8;
+    border: 1px solid #b8cee0;
+    color: #2e4d66;
     font-size: 13px;
     font-weight: 700;
     display: none;
   }
-  .upload-locked-note.show { display: block; }
+  .piano-overlay-note.show { display: block; }
   .mine-box .title {
     font-weight: 800;
     margin-bottom: 4px;
@@ -496,8 +489,8 @@ INDEX_HTML = r"""<!doctype html>
       <label class="upload-btn audio" id="upAudioLbl">🎵 音声ファイル
         <input type="file" accept="audio/*" hidden id="upAudio">
       </label>
-      <div class="upload-locked-note" id="pianoLockNote">
-        🎹 ピアノロール演出中につき、写真・動画は現在利用できません。（音声は利用可）
+      <div class="piano-overlay-note" id="pianoOverlayNote">
+        🎹 ピアノロール演出中です。写真／動画は鍵盤の上に半透明で重ねて表示されます。
       </div>
     </div>
     <div id="uploadStatus"></div>
@@ -653,21 +646,17 @@ async function refreshStatus() {
       if (myName) pushName();
     }
     updateMineControls(j.mine || {image:false, video:false, audio:false});
-    updatePianoLock(!!j.piano_mode);
+    updatePianoOverlayHint(!!j.piano_mode);
   } catch (e) { /* network blip */ }
 }
 
-// Reflect the host's piano-roll mode in the upload UI.  Image / video are
-// rejected at the server while piano-mode is on; we grey out those buttons
-// and surface a Japanese explanation so users know the feature is paused.
-function updatePianoLock(active) {
-  const note = document.getElementById('pianoLockNote');
-  const imgL = document.getElementById('upImageLbl');
-  const vidL = document.getElementById('upVideoLbl');
-  if (!note || !imgL || !vidL) return;
-  note.classList.toggle('show', active);
-  imgL.classList.toggle('locked', active);
-  vidL.classList.toggle('locked', active);
+// Show / hide the soft "your photo/video will appear translucently on top
+// of the keyboard" notice.  Uploads are NOT blocked anymore — the host
+// composites image / video as semi-transparent overlays on top of the
+// piano-roll scene, so users keep full control of when to send them.
+function updatePianoOverlayHint(active) {
+  const note = document.getElementById('pianoOverlayNote');
+  if (note) note.classList.toggle('show', active);
 }
 
 function updateMineControls(mine) {
@@ -1079,12 +1068,7 @@ async function handleUpload(inputEl, kind) {
           let reason = `HTTP ${xhr.status}`;
           try {
             const j = JSON.parse(xhr.responseText || '{}');
-            if (j.reason === 'piano_mode') {
-              reason = 'ピアノロール演出中のため現在利用できません';
-              updatePianoLock(true);
-            } else if (j.reason) {
-              reason = `${xhr.status}: ${j.reason}`;
-            }
+            if (j.reason) reason = `${xhr.status}: ${j.reason}`;
           } catch (_) {}
           reject(new Error(reason));
         }
