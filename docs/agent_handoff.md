@@ -1,6 +1,6 @@
 # Agent Handoff
 
-Updated: 2026-04-30 (MIDI backend → winmm ctypes; mido / python-rtmidi removed)
+Updated: 2026-04-30 (piano-mode lets photos / videos overlay translucently)
 
 ## Summary
 
@@ -435,4 +435,82 @@ the control panel.
   (ModuleNotFoundError)").  When a USB-MIDI interface is plugged in,
   the same boot line will show its name and the control panel's combo
   populates from `list_ports()`.
+
+## Piano-mode media overlays (2026-04-30)
+
+Piano-roll演出 now lets photos and videos coexist with the keyboard
+scene as semi-transparent overlays — uploads are no longer rejected.
+This required two structural changes:
+
+### `display_window.py` — QVideoWidget → QVideoSink
+
+`QVideoWidget` rendered straight to the GPU as a child widget, so
+`QPainter::setOpacity()` was a no-op for video.  Replaced with
+`QVideoSink`:
+
+- `QMediaPlayer.setVideoSink(self._video_sink)` — Qt 6 API.
+- `videoFrameChanged(QVideoFrame)` slot stores the latest frame as a
+  `QImage` (`frame.toImage()`).  Invalid / empty frames are dropped
+  silently so a one-frame decoder hiccup keeps the previous poster
+  on screen instead of black-flashing.
+- `_draw_video_frame(p, w, h)` letterboxes the latest QImage into the
+  full window in `paintEvent`.  Outside piano-mode this draws at full
+  opacity (acts as the legacy background).  Inside piano-mode the
+  caller wraps it in `setOpacity(self._piano_video_opacity)`.
+- `resizeEvent` no longer resizes a child widget; nothing to do.
+- `_stop_video_internal` clears `_latest_video_image` so the next
+  `play_video()` doesn't briefly flash the prior poster while the
+  decoder spins up.
+
+### Layered `paintEvent`
+
+Piano-mode order (back → front):
+1. `PianoRollScene.draw()` — opaque base
+2. Video frame (if any) @ `_piano_video_opacity` (default 0.35)
+3. Image background (if any) @ `_piano_image_opacity` (default 0.35)
+   — image / video stay mutex in the visual slot, so at most one of
+   2./3. ever paints
+4. FX scene @ `_piano_fx_opacity` (default 0.55)
+5. Marquee at full opacity
+
+Non-piano-mode order is the legacy behavior, but video is now drawn
+in `paintEvent` from `QVideoSink` instead of via a child widget.
+
+### Defaults are deliberately on the lower side (35%)
+
+A bright synthetic test photo at 0.45 was washing out the piano roll
+bars (`cache/piano_overlay_full.png` first capture).  At 0.35 the
+photo reads as atmosphere while the keys / bars stay dominant — the
+scenario the operator actually wants.  Operators with darker photos
+can dial it back up via `piano_image_opacity_pct` /
+`piano_video_opacity_pct` in `config.ini`.
+
+### Surface changes that fell out
+
+- `web_server.py /upload` — removed the `503 piano_mode` rejection for
+  image / video.  `piano_mode` stays in `/status` as informational
+  only, so the browser can show a soft hint.
+- `webpage.py` — replaced the yellow "現在利用できません" lock note
+  with a soft blue "🎹 ピアノロール演出中です。写真／動画は鍵盤の上
+  に半透明で重ねて表示されます。" hint, removed the `.locked` CSS,
+  and dropped the upload-XHR `piano_mode` 503 path.
+- `control_window.py` — `_dispatch_play` no longer skips image / video
+  on piano-mode (queue items by remote uploaders fire normally now);
+  `_open_image` / `_open_video` (local pickers) likewise.  Hint text
+  in the piano panel now says "演出中も写真・動画・エフェクトはそ
+  のまま受付され、半透明で重ねて表示されます".
+- `set_piano_mode(True)` no longer calls `_clear_image_internal` /
+  `_stop_video_internal` — image and video keep playing through the
+  toggle.
+
+### Verification
+
+- `python -m py_compile` — clean.
+- `cache/test_piano_overlay_full.py` — boots a real `DisplayWindow`,
+  enables piano mode, presses 5 chord notes, attaches a synthesized
+  test photo via `show_image()`, fires CHEER, posts a marquee, then
+  grabs the rendered window.  Resulting screenshot shows all four
+  layers visible together: bars + lit keys at the keyboard, photo
+  ghosted above, CHEER spotlight cones + confetti overlaid, marquee
+  scrolling at the top.
 

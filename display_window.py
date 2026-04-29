@@ -17,10 +17,9 @@ import os
 import time
 from typing import Optional
 
-from PySide6.QtCore       import QRectF, QPointF, Qt, QTimer, QUrl, Signal, Slot
-from PySide6.QtGui        import QColor, QFont, QFontMetricsF, QKeyEvent, QPainter, QPen, QPixmap
-from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
-from PySide6.QtMultimediaWidgets import QVideoWidget
+from PySide6.QtCore       import QRect, QRectF, QPointF, Qt, QTimer, QUrl, Signal, Slot
+from PySide6.QtGui        import QColor, QFont, QFontMetricsF, QImage, QKeyEvent, QPainter, QPen, QPixmap
+from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer, QVideoSink
 from PySide6.QtWidgets    import QWidget
 
 from animations import ImageScene, PianoRollScene, Scene, make_scene
@@ -79,22 +78,28 @@ class DisplayWindow(QWidget):
         self._title_fade = 1.0
 
         # --- background layer (persistent; cleared only by operator) ---
-        # Image: we keep a pixmap and draw it in paintEvent, letterboxed.
-        # Video: QVideoWidget overlay; the minimum-play-time rule decides
-        #        when it stops (see _on_video_status).
+        # Both image and video are now composited inside paintEvent so
+        # that piano-roll mode can draw them as semi-transparent overlays
+        # on top of the keyboard scene.  Video frames are sourced from a
+        # QVideoSink (no QVideoWidget child anymore — that one drew
+        # straight to the GPU and ignored painter opacity).
         self._bg_image: Optional[QPixmap] = None
         self._bg_caption: str = ""
         self._bg_image_owner: str = ""    # uploader client_id
 
-        # --- video overlay (QMediaPlayer + QVideoWidget) ---
+        # --- video overlay (QMediaPlayer + QVideoSink) ---
         # Created lazily the first time a video request arrives.
-        self._video_widget: Optional[QVideoWidget] = None
+        self._video_sink:   Optional[QVideoSink]   = None
         self._video_player: Optional[QMediaPlayer] = None
         self._video_audio:  Optional[QAudioOutput] = None
         self._video_active: bool = False
-        self._video_owner: str = ""       # uploader client_id
-        self._video_url: Optional[QUrl] = None
+        self._video_owner:  str  = ""     # uploader client_id
+        self._video_url:    Optional[QUrl] = None
         self._video_start_ms: float = 0.0
+        # Latest decoded frame from QVideoSink, drawn each paintEvent.
+        # Cleared on stop / error so we don't keep a stale poster on
+        # screen after playback finishes.
+        self._latest_video_image: Optional[QImage] = None
         # Minimum playback duration (seconds).  If the natural clip length is
         # shorter than this, the player restarts from position 0 on each
         # end-of-media until the total elapsed playback meets the minimum.
@@ -111,14 +116,17 @@ class DisplayWindow(QWidget):
         self._image_timer.timeout.connect(self._on_image_timeout)
 
         # --- piano roll (MIDI) mode ---
-        # When True, image / video uploads are refused at the control layer
-        # (browser sees a 503 piano_mode), the keyboard + scrolling note bars
-        # cover the full window, and any FX scene is rendered translucently
-        # on top so both the roll and the FX remain visible.
+        # When True, the 88-key keyboard + scrolling note bars cover the
+        # full window as the BASE layer.  Image / video / FX may all
+        # be live simultaneously and are rendered on top translucently
+        # (each with its own configurable opacity) so all four layers
+        # stay visible together.
         self._piano_mode: bool = False
         self._piano_scene: Optional[PianoRollScene] = None
         self._piano_scroll_pps: float = 110.0
-        self._piano_fx_opacity: float = 0.55
+        self._piano_image_opacity: float = 0.35
+        self._piano_video_opacity: float = 0.35
+        self._piano_fx_opacity:    float = 0.55
 
     # ---------- activity tracking ----------
     def _mark_activity(self) -> None:
@@ -208,6 +216,14 @@ class DisplayWindow(QWidget):
     def set_piano_fx_opacity(self, opacity: float) -> None:
         self._piano_fx_opacity = max(0.0, min(1.0, float(opacity)))
 
+    @Slot(float)
+    def set_piano_image_opacity(self, opacity: float) -> None:
+        self._piano_image_opacity = max(0.0, min(1.0, float(opacity)))
+
+    @Slot(float)
+    def set_piano_video_opacity(self, opacity: float) -> None:
+        self._piano_video_opacity = max(0.0, min(1.0, float(opacity)))
+
     # ---------- piano roll (MIDI) mode ----------
     def is_piano_mode(self) -> bool:
         return self._piano_mode
@@ -219,9 +235,10 @@ class DisplayWindow(QWidget):
             return
         self._piano_mode = on
         if on:
-            # Drop visual backgrounds — the piano roll covers the whole window.
-            self._stop_video_internal()
-            self._clear_image_internal()
+            # Image / video do NOT get cleared — they continue playing as
+            # semi-transparent overlays on top of the keyboard scene
+            # (see paintEvent).  Triggers a repaint so the new base layer
+            # appears immediately.
             self._piano_scene = PianoRollScene(
                 max(1, self.width()), max(1, self.height()),
                 scroll_pps=self._piano_scroll_pps)
@@ -271,24 +288,40 @@ class DisplayWindow(QWidget):
         return had_image
 
     # ---------- video overlay ----------
-    def _ensure_video_widgets(self) -> None:
-        if self._video_widget is not None:
+    def _ensure_video_player(self) -> None:
+        if self._video_player is not None:
             return
-        self._video_widget = QVideoWidget(self)
-        self._video_widget.setStyleSheet("background:#000;")
-        self._video_widget.hide()
-        self._video_audio  = QAudioOutput(self)
+        # Frame-by-frame compositing path.  QVideoSink hands us QImages
+        # via videoFrameChanged; paintEvent picks up the latest frame and
+        # blits it (with opacity, in piano-roll mode).  The previous
+        # QVideoWidget approach drew straight to the GPU which made
+        # painter opacity a no-op.
+        self._video_sink = QVideoSink(self)
+        self._video_sink.videoFrameChanged.connect(self._on_video_frame)
+        self._video_audio = QAudioOutput(self)
         self._video_audio.setVolume(0.8)
         self._video_player = QMediaPlayer(self)
-        self._video_player.setVideoOutput(self._video_widget)
+        self._video_player.setVideoSink(self._video_sink)
         self._video_player.setAudioOutput(self._video_audio)
         # Play each clip exactly once; we reschedule via setPosition(0) +
         # play() inside _on_video_status if the min-play window still
-        # hasn't elapsed.  That way the loop count auto-matches each clip's
-        # natural length (short clips loop, long clips play once).
+        # hasn't elapsed.  That way the loop count auto-matches each
+        # clip's natural length (short clips loop, long clips play once).
         self._video_player.setLoops(1)
         self._video_player.errorOccurred.connect(self._on_video_error)
         self._video_player.mediaStatusChanged.connect(self._on_video_status)
+
+    def _on_video_frame(self, frame) -> None:
+        # Cheap path: drop invalid / empty frames so paintEvent keeps
+        # showing the previous one (e.g., during a brief decoder hiccup).
+        if frame is None or not frame.isValid():
+            return
+        img = frame.toImage()
+        if img is None or img.isNull():
+            return
+        self._latest_video_image = img
+        # No explicit update() — _tick fires self.update() at 60 fps and
+        # will pick this frame up on the next paint.
 
     @Slot(str)
     @Slot(str, str)
@@ -305,14 +338,19 @@ class DisplayWindow(QWidget):
 
         Returns True if the image loaded and was installed, False if the
         file could not be decoded (any prior background is left untouched).
-        Refuses while piano-roll mode is active (returns False).
+
+        While piano-roll mode is active the image is rendered as a
+        semi-transparent overlay on top of the keyboard scene (see
+        paintEvent), so it remains useful to upload images during the
+        performance.
         """
-        if self._piano_mode:
-            return False
         pm = QPixmap(path)
         if pm.isNull():
             return False
         # Image background replaces video background (but not ongoing FX).
+        # Image / video stay mutually exclusive in the visual slot — the
+        # piano roll is rendered as a separate base layer, not as one of
+        # the visual-slot kinds.
         self._stop_video_internal()
         self._bg_image = pm
         self._bg_caption = caption or ""
@@ -340,22 +378,21 @@ class DisplayWindow(QWidget):
     @Slot(str)
     @Slot(str, str)
     def play_video(self, path: str, owner: str = "") -> None:
-        """Play a video as the background, then stop at first natural end
-        past `media_min_play_sec` (see _on_video_status).
+        """Play a video; stops at first natural end past
+        `media_min_play_sec` (see _on_video_status).
 
-        No-op while piano-roll mode is active.
+        While piano-roll mode is active the video is composited on top
+        of the keyboard scene as a semi-transparent overlay (see
+        paintEvent).  Outside piano mode it acts as the full-screen
+        background.
         """
-        if self._piano_mode:
-            return
-        self._ensure_video_widgets()
-        assert self._video_widget and self._video_player
-        # Clear any image background (and cancel its auto-clear timer); FX
-        # can still run as a transient overlay because it paints the whole
-        # window each frame.
+        self._ensure_video_player()
+        assert self._video_player is not None
+        # Image and video share the visual slot — clear any image first.
         self._clear_image_internal()
-        self._video_widget.setGeometry(0, 0, self.width(), self.height())
-        self._video_widget.lower()
-        self._video_widget.show()
+        # Drop any leftover frame from a previous clip so the first paint
+        # after play() doesn't briefly show the old poster.
+        self._latest_video_image = None
         url = QUrl.fromLocalFile(path) if os.path.isfile(path) else QUrl(path)
         self._video_url = url
         self._video_start_ms = time.perf_counter_ns() / 1_000_000.0
@@ -371,10 +408,9 @@ class DisplayWindow(QWidget):
         if self._video_player is not None:
             self._video_player.stop()
             self._video_player.setSource(QUrl())
-        if self._video_widget is not None:
-            self._video_widget.hide()
         self._video_active = False
         self._video_url = None
+        self._latest_video_image = None
         if self._video_owner:
             self._video_owner = ""
             self.ownershipChanged.emit("video", "")
@@ -431,8 +467,6 @@ class DisplayWindow(QWidget):
 
     def resizeEvent(self, ev) -> None:
         super().resizeEvent(ev)
-        if self._video_widget is not None and self._video_widget.isVisible():
-            self._video_widget.setGeometry(0, 0, self.width(), self.height())
         if self._piano_scene is not None:
             self._piano_scene.resize(max(1, self.width()), max(1, self.height()))
 
@@ -502,41 +536,56 @@ class DisplayWindow(QWidget):
         p.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
         w, h = self.width(), self.height()
 
-        # Layer order (back → front):
-        #   1. Black (always the real backdrop)
-        #   2. Background image, if any (persistent until clear_display)
-        #      — video background draws itself as a child widget, so we
-        #        DON'T fill the frame when video is active (else we'd
-        #        erase each new frame).
-        #   3. Idle title, if in the long-idle "welcome" state AND no
-        #      other visual is present
-        #   4. Piano-roll scene (opaque; replaces all visual backgrounds
-        #      while piano-mode is active)
-        #   5. FX scene (opaque normally; rendered translucent when stacked
-        #      on a video or piano-roll backdrop so both stay readable)
-        #   6. Marquee tracks — always on top of everything visual
-        has_video = self._video_active and self._video_widget is not None \
-                    and self._video_widget.isVisible()
+        # Layer order (back → front).  Piano mode adds a piano-roll BASE
+        # underneath everything; the visual slots (image / video) and
+        # FX overlay semi-transparently on top so all four (roll +
+        # image OR video + FX + marquee) stay visible together.
+        #
+        #   piano-mode ON:
+        #     1. PianoRollScene (opaque base)
+        #     2. Image, if any   @ piano_image_opacity
+        #     2. Video frame, if any @ piano_video_opacity
+        #        (image/video are mutually exclusive in the visual slot)
+        #     3. FX scene, if any @ piano_fx_opacity
+        #     4. Marquee
+        #
+        #   piano-mode OFF (legacy behavior):
+        #     1. Video frame as full-screen background, OR
+        #        Image background, OR
+        #        Idle "POCOBOARD" title, OR
+        #        Black fill
+        #     2. FX scene (opaque normally; @0.75 over video so the video
+        #        stays visible through the spark storm)
+        #     3. Marquee
+        has_video = self._video_active and self._latest_video_image is not None
+        has_image = self._bg_image is not None and not self._bg_image.isNull()
 
         if self._piano_mode and self._piano_scene is not None:
-            # Piano-roll fills the frame; image/video backgrounds are
-            # suppressed while this mode is on (set_piano_mode clears them).
+            # Base layer: keyboard + scrolling note bars.
             self._piano_scene.draw(p, w, h)
-        elif not has_video:
-            if self._bg_image is not None and not self._bg_image.isNull():
-                p.fillRect(0, 0, w, h, Qt.GlobalColor.black)
+            # Visual-slot overlays (image / video) on top, translucent.
+            if has_video:
+                p.setOpacity(self._piano_video_opacity)
+                self._draw_video_frame(p, w, h)
+                p.setOpacity(1.0)
+            if has_image:
+                p.setOpacity(self._piano_image_opacity)
                 self._draw_bg_image(p, w, h)
-            elif self._show_idle_title and self._scene is None:
-                p.fillRect(0, 0, w, h, QColor(8, 10, 16))
-                self._draw_idle(p, w, h, alpha=self._title_fade)
-            else:
-                p.fillRect(0, 0, w, h, Qt.GlobalColor.black)
+                p.setOpacity(1.0)
+        elif has_video:
+            # Non-piano mode: video frame fills the screen as background.
+            p.fillRect(0, 0, w, h, Qt.GlobalColor.black)
+            self._draw_video_frame(p, w, h)
+        elif has_image:
+            p.fillRect(0, 0, w, h, Qt.GlobalColor.black)
+            self._draw_bg_image(p, w, h)
+        elif self._show_idle_title and self._scene is None:
+            p.fillRect(0, 0, w, h, QColor(8, 10, 16))
+            self._draw_idle(p, w, h, alpha=self._title_fade)
+        else:
+            p.fillRect(0, 0, w, h, Qt.GlobalColor.black)
 
         if self._scene is not None and self._scene.alive:
-            # FX covers the whole frame. For video / piano-roll backgrounds
-            # we render the scene translucently so the underlying visuals
-            # stay readable through the BOMB / CHEER spark storm — matches
-            # the "effect on top, semi-transparent" spec.
             if self._piano_mode:
                 p.setOpacity(self._piano_fx_opacity)
                 self._scene.draw(p, w, h)
@@ -550,6 +599,20 @@ class DisplayWindow(QWidget):
 
         if self._marquee.tracks:
             self._marquee.draw(p, QRectF(0, 0, w, h))
+
+    def _draw_video_frame(self, p: QPainter, w: int, h: int) -> None:
+        img = self._latest_video_image
+        if img is None or img.isNull():
+            return
+        iw, ih = img.width(), img.height()
+        if iw <= 0 or ih <= 0:
+            return
+        scale = min(w / iw, h / ih)
+        dw = max(1, int(iw * scale))
+        dh = max(1, int(ih * scale))
+        dx = (w - dw) // 2
+        dy = (h - dh) // 2
+        p.drawImage(QRect(dx, dy, dw, dh), img)
 
     def _draw_bg_image(self, p: QPainter, w: int, h: int) -> None:
         pm = self._bg_image
