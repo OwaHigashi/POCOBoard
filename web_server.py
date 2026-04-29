@@ -95,6 +95,11 @@ class WebBridge(QObject):
         self._volume = 80
         self._debounce_ms = 300
         self._last_fx_ms = 0
+        # When True, the operator has switched the display into piano-roll
+        # mode.  The HTTP layer rejects image / video uploads with
+        # 503 piano_mode and surfaces the flag in /status so the browser UI
+        # can grey out the corresponding upload buttons.
+        self._piano_mode = False
         # Known clients — client_id -> {name, last_seen_ms, ip, blocked}
         self._clients: dict[str, dict] = {}
         self._last_talk_log: dict[str, float] = {}
@@ -159,6 +164,14 @@ class WebBridge(QObject):
         with self._lock:
             self._marquee_lanes_used = int(used)
             self._marquee_lanes_max = int(maximum)
+
+    def set_piano_mode(self, on: bool) -> None:
+        with self._lock:
+            self._piano_mode = bool(on)
+
+    def is_piano_mode(self) -> bool:
+        with self._lock:
+            return self._piano_mode
 
     # ---- per-client media ownership ----
     def set_owner(self, kind: str, cid: str) -> None:
@@ -488,6 +501,10 @@ class _Handler(BaseHTTPRequestHandler):
                             "max":  snap["marquee_max"]},
                 "me":   {"id": cid, "name": name, "allowed": allowed},
                 "mine": mine,
+                # piano_mode: when true, image/video uploads are refused
+                # (server returns 503 piano_mode).  The browser UI uses
+                # this to grey out the corresponding buttons.
+                "piano_mode": self.bridge.is_piano_mode(),
             }, set_cookie=new_cookie)
             return
         self._send_json(404, {"ok": False, "reason": "not_found"})
@@ -684,6 +701,16 @@ class _Handler(BaseHTTPRequestHandler):
             kind = (query.get("type", [""])[0] or "").lower()
             if kind not in _UPLOAD_LIMITS:
                 self._send_json(400, {"ok": False, "reason": "bad_type"},
+                                set_cookie=new_cookie)
+                return
+            # Piano-roll mode locks out image / video uploads — the display
+            # is fully owned by the keyboard / scrolling-note view.  Audio
+            # is still allowed because it doesn't compete for the canvas.
+            if kind in ("image", "video") and self.bridge.is_piano_mode():
+                self.bridge.emit_log(
+                    "UPLOAD",
+                    f"{now_hms}  {label:24s}  UPLOAD    X piano_mode ({kind})")
+                self._send_json(503, {"ok": False, "reason": "piano_mode"},
                                 set_cookie=new_cookie)
                 return
             raw_name = query.get("filename", ["upload"])[0]

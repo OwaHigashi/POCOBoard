@@ -1,6 +1,6 @@
 # Agent Handoff
 
-Updated: 2026-04-26 (mobile UI fit + marquee tag legibility)
+Updated: 2026-04-29 (USB MIDI piano-roll演出 added)
 
 ## Summary
 
@@ -219,3 +219,143 @@ ignored a `<meta viewport width=360>` override).
    document's media queries.
 4. `chrome --headless --disable-gpu --hide-scrollbars --window-size=1200,2300 --screenshot=...` against the wrapper.
 5. Crop the screenshot with PIL to focus on the marquee/FX regions.
+
+## USB MIDI ピアノロール演出 (2026-04-29)
+
+New full-screen演出 driven by a USB-MIDI keyboard.  Selectable from the
+control window only; while it is active the host blocks image/video
+uploads and renders FX (CHEER 等) translucently on top of the piano roll
+so both stay visible.
+
+### New module: `midi_engine.py`
+
+- Wraps `mido` (via `python-rtmidi`) to expose Note-ON / Note-OFF as Qt
+  signals (`noteOn(int, int)` and `noteOff(int)`).
+- `MidiEngine.is_available()` / `import_error()` are static so the rest
+  of the app can degrade cleanly when `mido` isn't installed (the control
+  panel shows the import error string and the toggle is still usable —
+  just yields no events).
+- `mido` callbacks fire on a python-rtmidi worker thread; emitted Qt
+  signals queue automatically since the `DisplayWindow` slot lives on
+  the main thread.
+- Velocity-0 Note-ON is treated as Note-OFF (running-status convention).
+
+### `animations.py` — `PianoRollScene`
+
+- Lifetime: `duration_ms = float("inf")` — the scene is alive for the
+  whole time piano-mode is on; `update()` always returns True.  It is
+  driven from the same per-frame `_tick` as the FX scenes.
+- Layout: 88 keys (MIDI 21..108 = A0..C8), 52 white + 36 black.
+  Keyboard occupies the bottom 18 % of the window, roll occupies the
+  rest.  Scrolling rate is `scroll_pps` (default 110 px/s, configurable
+  via `piano_scroll_pps`).
+- Rendering: notes flow UPWARD from the keyboard (live capture style —
+  there is no "future" data).  A held note's bottom stays anchored at
+  the keyboard top while its top extends upward; on Note-OFF the bar is
+  released into the scroll, freezing its height at duration × pps.
+- Color is per pitch-class (`note % 12`) so each semitone has a distinct
+  hue (C=red, E=yellow, G=cyan, A=blue, etc.).  Held notes get an outer
+  glow + matching key color on the keyboard so you can read at a
+  glance which key is down.
+- Pruning: completed notes whose top edge has scrolled above y=0 are
+  dropped each frame to keep `_completed` bounded over long sessions.
+
+### `display_window.py`
+
+- Tracks `_piano_mode: bool` + `_piano_scene: Optional[PianoRollScene]`.
+- New signal: `pianoModeChanged(bool)`.
+- New slots: `set_piano_mode(bool)`, `piano_note_on(note, vel)`,
+  `piano_note_off(note)`, `set_piano_scroll_pps(float)`,
+  `set_piano_fx_opacity(float)`.
+- `set_piano_mode(True)` clears any image/video background AND creates
+  the scene; `set_piano_mode(False)` releases all held notes and drops
+  the scene.
+- `show_image()` / `play_video()` are no-ops while piano-mode is on
+  (`show_image` returns False as before — `_dispatch_play` has a
+  separate piano-mode guard above the call so the log line is honest).
+- `paintEvent` layering when piano-mode is on:
+  1. PianoRollScene fills the frame.
+  2. FX scene (if any) drawn at `_piano_fx_opacity` (default 0.55).
+  3. Marquee on top.
+- `resizeEvent` calls `_piano_scene.resize(w, h)` so the keyboard /
+  bars re-layout instantly.
+
+### `web_server.py`
+
+- `WebBridge` gained `set_piano_mode(bool)` / `is_piano_mode()`.
+- `/status` JSON now includes `piano_mode: bool` (default false).
+- `/upload?type=image` and `/upload?type=video` return 503 with
+  `{"reason":"piano_mode"}` while piano-mode is on; audio still goes
+  through (it doesn't compete for the canvas).
+
+### `webpage.py`
+
+- `refreshStatus()` reads `j.piano_mode` and calls `updatePianoLock(...)`
+  which:
+  - Toggles a `.locked` class on the 写真 / 動画 upload labels (greyed,
+    `pointer-events:none`).
+  - Shows/hides a yellow notice: "🎹 ピアノロール演出中につき、
+    写真・動画は現在利用できません。（音声は利用可）".
+- The XHR upload path now recognises `{"reason":"piano_mode"}` 503s and
+  surfaces "ピアノロール演出中のため現在利用できません" + re-arms the
+  lock UI in case the operator just toggled it on.
+
+### `control_window.py`
+
+- New panel inside the 表示 tab: "🎹 ピアノロール (USB MIDI)" with:
+  - ON/OFF toggle (forwards to `display.set_piano_mode`).
+  - MIDI port `QComboBox` populated from `MidiEngine.list_ports()` +
+    `ポート更新` button.  Picking a port opens it; picking
+    "(MIDI ポートなし)" closes the current one.
+  - Status pill showing `● 演出中 / ○ 停止中` and the open port name.
+  - Hint text becomes a yellow warning when `mido` isn't available.
+- `display.pianoModeChanged` is connected to `_on_piano_mode_changed`
+  which forwards the new state to `bridge.set_piano_mode(...)` so the
+  HTTP layer agrees with the on-screen state.
+- New log color: `PIANO -> #4a8fc4`.
+- `_dispatch_play` short-circuits image/video items with a "再生スキップ"
+  PIANO log when piano-mode is on (queue items by other clients no
+  longer cause misleading "bad image" logs).
+- `_open_image` / `_open_video` (the local file pickers) similarly
+  short-circuit when piano-mode is on.
+
+### `pocoboard.py`
+
+- Constructs `MidiEngine` and wires
+  `midi.noteOn → display.piano_note_on`,
+  `midi.noteOff → display.piano_note_off`.
+- Reads `piano_scroll_pps` (default 110) and `piano_fx_opacity_pct`
+  (default 55) from `config.ini` and pushes them into the display.
+- Closes the MIDI port during shutdown (before `srv.shutdown()`).
+
+### Config / install
+
+- `config.example.ini` gained a "Piano roll (USB MIDI)" section:
+  `piano_scroll_pps = 110`, `piano_fx_opacity_pct = 55`.
+- `install-deps.bat` now also installs `mido python-rtmidi` (failure to
+  install them is non-fatal — the UI just disables the panel and shows
+  the import error).
+
+### Verification
+
+- `python -m py_compile midi_engine.py animations.py display_window.py
+  control_window.py web_server.py webpage.py pocoboard.py` — clean.
+- `cache/test_piano_roll.py` — renders an 88-key keyboard + chord
+  progression to `cache/piano_roll_test.png`.  Verifies pitch-class
+  coloring, white/black key layout, held-note glow on the keyboard.
+- `cache/test_piano_overlay.py` — renders piano roll + CHEER scene at
+  opacity 0.55 to `cache/piano_with_cheer.png`.  Confirms the
+  semi-transparent stacking spec (両方みえる).
+- `cache/test_upload_piano_block.py` — boots a real `WebBridge` HTTP
+  server, sends `/upload?type=image|video|audio` while toggling
+  `set_piano_mode`, asserts:
+  - off: image upload → 200
+  - on : image upload → 503 piano_mode
+  - on : video upload → 503 piano_mode
+  - on : audio upload → 200
+  - on : `/status` includes `"piano_mode": true`
+- Live boot of `pocoboard.py --no-fullscreen` on this machine (no MIDI
+  hardware, no `mido` installed) prints
+  `[pocoboard] MIDI: unavailable (ModuleNotFoundError: No module named 'mido')`
+  and otherwise starts normally.
+

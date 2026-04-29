@@ -37,7 +37,14 @@ if errorlevel 1 (
     pause
     exit /b 1
 )
+REM mido + python-rtmidi enable USB MIDI input for the piano-roll mode.
+REM Optional: POCOBoard runs without them; piano-roll just shows "MIDI unavailable".
+"%PY%" -m pip install --user mido python-rtmidi
+if errorlevel 1 (
+    echo [!] mido / python-rtmidi install failed - piano-roll MIDI input will be unavailable.
+    echo     The rest of POCOBoard will still work.
+)
 echo.
-echo [OK] PySide6 installed.  Now double-click run.bat to start POCOBoard.
+echo [OK] Dependencies installed.  Now double-click run.bat to start POCOBoard.
 pause
 endlocal

@@ -343,6 +343,26 @@ INDEX_HTML = r"""<!doctype html>
   .upload-btn.video { background: linear-gradient(160deg, #e9e1eb, #ddd3e0); }
   .upload-btn.audio { background: linear-gradient(160deg, #e5ece6, #dbe4dc); }
   .upload-btn.uploading { opacity: .5; pointer-events: none; }
+  .upload-btn.locked {
+    opacity: .45;
+    cursor: not-allowed;
+    pointer-events: none;
+    background: linear-gradient(160deg, #ece2da, #ddd0c4);
+    color: #6d6258;
+  }
+  .upload-locked-note {
+    flex-basis: 100%;
+    margin-top: 4px;
+    padding: 8px 12px;
+    border-radius: 12px;
+    background: #f6e9d6;
+    border: 1px solid #d8c190;
+    color: #5d4818;
+    font-size: 13px;
+    font-weight: 700;
+    display: none;
+  }
+  .upload-locked-note.show { display: block; }
   .mine-box .title {
     font-weight: 800;
     margin-bottom: 4px;
@@ -467,15 +487,18 @@ INDEX_HTML = r"""<!doctype html>
 
   <div class="upload-box" id="uploadBox">
     <div class="upload-row">
-      <label class="upload-btn image">📷 写真を送る
+      <label class="upload-btn image" id="upImageLbl">📷 写真を送る
         <input type="file" accept="image/*" hidden id="upImage">
       </label>
-      <label class="upload-btn video">🎬 動画を送る
+      <label class="upload-btn video" id="upVideoLbl">🎬 動画を送る
         <input type="file" accept="video/*" hidden id="upVideo">
       </label>
-      <label class="upload-btn audio">🎵 音声ファイル
+      <label class="upload-btn audio" id="upAudioLbl">🎵 音声ファイル
         <input type="file" accept="audio/*" hidden id="upAudio">
       </label>
+      <div class="upload-locked-note" id="pianoLockNote">
+        🎹 ピアノロール演出中につき、写真・動画は現在利用できません。（音声は利用可）
+      </div>
     </div>
     <div id="uploadStatus"></div>
   </div>
@@ -630,7 +653,21 @@ async function refreshStatus() {
       if (myName) pushName();
     }
     updateMineControls(j.mine || {image:false, video:false, audio:false});
+    updatePianoLock(!!j.piano_mode);
   } catch (e) { /* network blip */ }
+}
+
+// Reflect the host's piano-roll mode in the upload UI.  Image / video are
+// rejected at the server while piano-mode is on; we grey out those buttons
+// and surface a Japanese explanation so users know the feature is paused.
+function updatePianoLock(active) {
+  const note = document.getElementById('pianoLockNote');
+  const imgL = document.getElementById('upImageLbl');
+  const vidL = document.getElementById('upVideoLbl');
+  if (!note || !imgL || !vidL) return;
+  note.classList.toggle('show', active);
+  imgL.classList.toggle('locked', active);
+  vidL.classList.toggle('locked', active);
 }
 
 function updateMineControls(mine) {
@@ -1035,7 +1072,23 @@ async function handleUpload(inputEl, kind) {
           lbl.childNodes[0].nodeValue = `アップロード中 ${pct}% — ${f.name}`;
         }
       };
-      xhr.onload  = () => xhr.status >= 200 && xhr.status < 300 ? resolve() : reject(new Error(`HTTP ${xhr.status}`));
+      xhr.onload  = () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          resolve();
+        } else {
+          let reason = `HTTP ${xhr.status}`;
+          try {
+            const j = JSON.parse(xhr.responseText || '{}');
+            if (j.reason === 'piano_mode') {
+              reason = 'ピアノロール演出中のため現在利用できません';
+              updatePianoLock(true);
+            } else if (j.reason) {
+              reason = `${xhr.status}: ${j.reason}`;
+            }
+          } catch (_) {}
+          reject(new Error(reason));
+        }
+      };
       xhr.onerror = () => reject(new Error('network error'));
       xhr.send(f);
     });
