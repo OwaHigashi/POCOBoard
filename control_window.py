@@ -474,6 +474,7 @@ class ControlWindow(QWidget):
         self._http_host = "0.0.0.0"
         self._http_port = 8080
 
+        self._pending_log_lines: list[tuple[str, str]] = []
         self._build_ui()
         # Snap to whatever the layout actually needs (at least the legacy
         # 820 x 880 footprint, so existing operators don't see a smaller
@@ -1094,6 +1095,12 @@ class ControlWindow(QWidget):
         self.btnLogClear.clicked.connect(self.logView.clear)
         row.addWidget(self.btnLogClear)
         ll.addLayout(row)
+        # Flush any log lines buffered during _build_ui (before logView existed).
+        if self._pending_log_lines:
+            pending = self._pending_log_lines
+            self._pending_log_lines = []
+            for kind, line in pending:
+                self.on_request_logged(kind, line)
         return w
 
     # ========== public helpers ==========
@@ -1149,6 +1156,12 @@ class ControlWindow(QWidget):
                     .replace("<", "&lt;")
                     .replace(">", "&gt;")
                     .replace("  ", "&nbsp;&nbsp;"))
+        # Early callers (e.g. piano-box MIDI auto-connect during _build_ui)
+        # can fire before _build_log_tab has created self.logView. Buffer
+        # those lines and flush them when the log tab is built.
+        if not hasattr(self, "logView"):
+            self._pending_log_lines.append((kind, line))
+            return
         self.logView.append(
             f'<span style="color:{color}; font-family:Consolas,monospace;">'
             f'{safe}</span>'
