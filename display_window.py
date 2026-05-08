@@ -18,7 +18,7 @@ import time
 from typing import Optional
 
 from PySide6.QtCore       import QRect, QRectF, QPointF, Qt, QTimer, QUrl, Signal, Slot
-from PySide6.QtGui        import QColor, QFont, QFontMetricsF, QImage, QKeyEvent, QPainter, QPen, QPixmap
+from PySide6.QtGui        import QColor, QFont, QFontMetricsF, QImage, QImageReader, QKeyEvent, QPainter, QPen, QPixmap
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer, QVideoSink
 from PySide6.QtWidgets    import QWidget
 
@@ -356,7 +356,17 @@ class DisplayWindow(QWidget):
         paintEvent), so it remains useful to upload images during the
         performance.
         """
-        pm = QPixmap(path)
+        # Honor EXIF orientation: smartphones often store portrait photos
+        # as landscape pixels + an Orientation tag asking the viewer to
+        # rotate. QPixmap(path) ignores that tag, so portrait shots came
+        # out sideways. QImageReader.setAutoTransform(True) reads the tag
+        # and applies the rotation/mirroring before we get the pixels.
+        reader = QImageReader(path)
+        reader.setAutoTransform(True)
+        img = reader.read()
+        if img.isNull():
+            return False
+        pm = QPixmap.fromImage(img)
         if pm.isNull():
             return False
         # Image background replaces video background (but not ongoing FX).
