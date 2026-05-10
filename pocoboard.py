@@ -82,6 +82,10 @@ def main() -> int:
     disp_w = cfg.get_int("display_width", 1600)
     disp_h = cfg.get_int("display_height", 900)
     marquee_size = cfg.get_int("marquee_size", 64)
+    # Global size multiplier (percent).  150 = 1.5x baseline so on-screen
+    # text is comfortably readable for the audience.  Operators can
+    # retune live from the 横スクロール tab (50–500%).
+    marquee_size_pct = cfg.get_int("marquee_size_pct", 150)
     # image_display_sec: image background auto-clears after N seconds (0 = never).
     # media_min_play_sec: videos and uploaded audio loop until at least N seconds
     #                     have played, then stop at the next natural end (0 = play once).
@@ -143,6 +147,7 @@ def main() -> int:
     )
     display.set_image_display_sec(image_sec)
     display.set_media_min_play_sec(min_play_sec)
+    display.set_marquee_scale(max(50, min(500, marquee_size_pct)) / 100.0)
     display.set_piano_scroll_pps(float(piano_pps))
     display.set_piano_fx_opacity(max(0, min(100, piano_fx_op)) / 100.0)
     display.set_piano_image_opacity(max(0, min(100, piano_img_op)) / 100.0)

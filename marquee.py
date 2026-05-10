@@ -208,11 +208,29 @@ class MarqueeEngine:
         self.base_font = QFont(base_font)
         self.tracks: list[Track] = []
         self._metrics_cache: dict[tuple, QFontMetricsF] = {}
+        # Global size multiplier set by the operator (50%–500% in the UI,
+        # 0.5..5.0 here).  Applied on top of per-run <small>/<big> scaling.
+        self.scale: float = 1.0
+
+    def set_scale(self, scale: float) -> None:
+        """Update the global size multiplier.
+
+        Currently-scrolling tracks were laid out at the previous scale —
+        their cached `_LaidRun.width` would no longer match the font we
+        draw with, producing overlap/gaps.  Clearing them avoids that:
+        any in-flight messages disappear, and subsequent ones use the
+        new size.
+        """
+        new = max(0.1, float(scale))
+        if abs(new - self.scale) < 1e-3:
+            return
+        self.scale = new
+        self.tracks.clear()
 
     # --- measurement ---
     def _font_at(self, scale: float) -> QFont:
         f = QFont(self.base_font)
-        f.setPixelSize(max(8, int(self.base_font.pixelSize() * scale)))
+        f.setPixelSize(max(8, int(self.base_font.pixelSize() * scale * self.scale)))
         return f
 
     def _metrics(self, font: QFont) -> QFontMetricsF:
@@ -245,7 +263,7 @@ class MarqueeEngine:
 
     # --- lane geometry (dynamic based on area height) ---
     def _lane_height(self) -> float:
-        return max(24.0, self.base_font.pixelSize() * 1.15)
+        return max(24.0, self.base_font.pixelSize() * self.scale * 1.15)
 
     def _n_lanes(self, area_h: float) -> int:
         return max(4, int(area_h // self._lane_height()))
