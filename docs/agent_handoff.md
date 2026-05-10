@@ -1,6 +1,6 @@
 # Agent Handoff
 
-Updated: 2026-04-30 (piano-mode MIDI stability hardening)
+Updated: 2026-05-10 (marquee size scale 50%–500%)
 
 ## Summary
 
@@ -602,4 +602,75 @@ Fixes:
   scene `_active`=63 / `_completed`=877, no crash, no exception
   printed. Confirms the defensive `list()` snapshot + try/except
   hold up under real concurrency.
+
+## Marquee size scale (2026-05-10)
+
+User report: ニコニコ風スクロール文字が小さすぎて配信視聴者から
+読めない。全体に 1.5 倍くらい大きくしたい + 管理画面から自由に
+スケール変更したい (50〜500%)。
+
+### `marquee.py`
+
+- `MarqueeEngine` gained a global `scale: float` (default 1.0).
+  Both `_font_at` and `_lane_height` now multiply pixel size by
+  `self.scale` so per-message `<small>/<big>` tags stack on top of
+  the operator-set baseline instead of being capped by it.
+- New `set_scale(float)` method clamps to `>= 0.1` and **clears
+  `self.tracks`** on a real change.  The reason: each `_LaidRun`
+  caches its own `width / ascent / descent` from the metrics at
+  layout time.  If we only flip the scale and let in-flight tracks
+  keep scrolling, `_draw_runs` paints text at the new size while
+  `cursor_x += r.width` advances by the old width — visually that
+  shows up as overlap or runaway gaps.  Wiping the in-flight set
+  is cheap and matches the operator's mental model ("change size,
+  start fresh").
+- The `_metrics_cache` key is `(family, pixelSize, weight)`, so
+  scale changes simply produce new cache entries.  No invalidation
+  needed; the cache stays bounded as long as the operator doesn't
+  spam every percent step.
+
+### `display_window.py`
+
+- New `Slot(float) set_marquee_scale(scale)` forwards to
+  `MarqueeEngine.set_scale`, then `_emit_marquee_status()` (the
+  cleared track count goes to 0) and `update()`.
+
+### `pocoboard.py`
+
+- Reads `marquee_size_pct` from config (default **150**).  Clamped
+  to 50..500 before being applied as `scale = pct / 100` so a
+  malformed config can't make the engine emit 0-pixel fonts or
+  pathological sizes.
+- 150 % is the new shipped default — the user's original "全体に
+  5割大きく" request — so the on-screen text is comfortably
+  readable for the audience without any operator action.
+
+### `control_window.py`
+
+- 横スクロール tab: new `QSpinBox` `文字サイズ:` next to the
+  speed combo, range 50..500, step 10, suffix " %".  Initial value
+  reads `display._marquee.scale * 100`, so it picks up whatever
+  the config / earlier session left in place.
+- `valueChanged` → `display.set_marquee_scale(v / 100.0)` and
+  logs an `ADMIN` line so changes show up in the log tab.
+- Tooltip warns that changing size clears in-flight messages.
+- Bottom hint mentions the new 50%–500% range.
+
+### Config
+
+- `config.example.ini`: added `marquee_size_pct = 150` with a
+  short comment describing the live override.
+- `README.md`: 横スクロールタブ section gained the 文字サイズ
+  bullet + the "changing size clears in-flight messages" note;
+  the sample config block now lists `marquee_size_pct = 150`.
+
+### Verification
+
+- `python -m py_compile marquee.py display_window.py
+  control_window.py pocoboard.py` — clean.
+- No live-render verification was performed (host has no display
+  window open during this session).  Smoke check on next boot:
+  start POCOBoard, flow a message, confirm it renders ~1.5x the
+  pre-change size by default, then drag the spinbox to 250 % and
+  500 % to confirm scale + auto-clear behavior.
 

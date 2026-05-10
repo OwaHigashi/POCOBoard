@@ -724,6 +724,21 @@ class ControlWindow(QWidget):
             self.cbSpeed.addItem(f"x{i}", i)
         self.cbSpeed.setCurrentIndex(0)
         row2.addWidget(self.cbSpeed)
+        row2.addSpacing(16)
+        row2.addWidget(QLabel("文字サイズ:"))
+        self.spMqScale = QSpinBox()
+        self.spMqScale.setRange(50, 500)
+        self.spMqScale.setSingleStep(10)
+        self.spMqScale.setSuffix(" %")
+        self.spMqScale.setMinimumHeight(30)
+        self.spMqScale.setValue(int(round(self.display._marquee.scale * 100)))
+        self.spMqScale.setToolTip(
+            "ニコニコ風スクロール文字の全体サイズ。\n"
+            "100% = config.ini の marquee_size どおり。\n"
+            "変更すると現在流れているメッセージはクリアされ、\n"
+            "新しいメッセージから新しいサイズで表示されます。")
+        self.spMqScale.valueChanged.connect(self._on_marquee_scale_changed)
+        row2.addWidget(self.spMqScale)
         row2.addStretch(1)
         self.btnMqSend = QPushButton("流す")
         self.btnMqSend.setProperty("class", "send")
@@ -744,7 +759,8 @@ class ControlWindow(QWidget):
             "タグ早見: <r><g><b><y><c><m><o><pink><w>  / "
             "<small><big>  / <u></u>  <hl></hl>  / "
             "<ue> <shita>  —  <br>"
-            "速度 x1〜x5。ピクセル/秒固定 (文字数に関わらず同じ速度で流れます)。")
+            "速度 x1〜x5。ピクセル/秒固定 (文字数に関わらず同じ速度で流れます)。<br>"
+            "文字サイズは 50%〜500% で全体スケールを調整できます (100% = config の marquee_size)。")
         hint.setProperty("class", "small")
         hint.setWordWrap(True)
         ml.addWidget(hint)
@@ -1461,6 +1477,10 @@ class ControlWindow(QWidget):
     def _local_marquee_stop(self) -> None:
         self.display.stop_marquee()
         self._log_local("MARQUEE/STOP", "STOP")
+
+    def _on_marquee_scale_changed(self, pct: int) -> None:
+        self.display.set_marquee_scale(int(pct) / 100.0)
+        self._log_local("ADMIN", f"横スクロール文字サイズ: {pct}%")
 
     def _open_video(self) -> None:
         path, _ = QFileDialog.getOpenFileName(

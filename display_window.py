@@ -207,6 +207,18 @@ class DisplayWindow(QWidget):
                 self._image_timer.start(self._image_display_sec * 1000)
 
     @Slot(float)
+    def set_marquee_scale(self, scale: float) -> None:
+        """Resize the marquee text globally (1.0 = config baseline).
+
+        Range is left to the caller — the control window clamps to
+        50%–500% (0.5..5.0).  Currently-scrolling messages are cleared
+        as a side effect (see MarqueeEngine.set_scale).
+        """
+        self._marquee.set_scale(float(scale))
+        self._emit_marquee_status()
+        self.update()
+
+    @Slot(float)
     def set_piano_scroll_pps(self, pps: float) -> None:
         self._piano_scroll_pps = max(20.0, float(pps))
         if self._piano_scene is not None:
