@@ -49,6 +49,7 @@ TALK_CHUNK_N    = TALK_SR * TALK_CHUNK_MS // 1000   # 320 samples per pump
 TALK_CHUNK_B    = TALK_CHUNK_N * 2                  # 640 bytes
 TALK_MAX_BACKLOG_B = TALK_SR * 2 * 2                # 2 s of Int16 mono
 TALK_IDLE_PRUNE_MS = 10_000                         # drop client after silent this long
+_TALK_SILENCE = b"\x00" * TALK_CHUNK_B              # keep-warm chunk, allocated once
 
 
 # =====================================================
@@ -617,39 +618,46 @@ class AudioEngine(QObject):
             if free < TALK_CHUNK_B:
                 break
 
-            any_active = False
-            accum = self._mix_accum
-            for i in range(TALK_CHUNK_N):
-                accum[i] = 0
-
             # Snapshot the stream list — play_talk_chunk runs on the same
             # thread so mutation during iteration is not expected, but
             # `list(...)` keeps us safe against a future code change.
+            chunks: list[bytes] = []
             for stream in list(self._streams.values()):
                 if not stream.queue:
                     continue
                 data = stream.take(TALK_CHUNK_N)
-                if not data:
-                    continue
-                n = len(data) // 2
-                try:
-                    samples = struct.unpack("<%dh" % n, data)
-                except struct.error:
-                    # Corrupt chunk — drop it and move on rather than kill the pump.
-                    continue
-                for i, s in enumerate(samples):
-                    accum[i] += s
-                any_active = True
+                if data:
+                    chunks.append(data)
 
-            if any_active:
-                # Saturating clip to Int16. For N concurrent speakers the sum
-                # can exceed the range; clipping is quicker than tracking N and
-                # is imperceptible in brief overlap.
-                out = array.array("h", [
-                    32767 if s > 32767 else (-32768 if s < -32768 else s)
-                    for s in accum
-                ])
-                payload = out.tobytes()
+            if chunks:
+                if len(chunks) == 1:
+                    # Single speaker — by far the common case.  The chunk
+                    # is already saturated Int16 PCM, so mixing/clipping
+                    # is a no-op: pad to the pump size and write as-is.
+                    payload = chunks[0]
+                    if len(payload) < TALK_CHUNK_B:
+                        payload += b"\x00" * (TALK_CHUNK_B - len(payload))
+                else:
+                    accum = self._mix_accum
+                    for i in range(TALK_CHUNK_N):
+                        accum[i] = 0
+                    for data in chunks:
+                        n = len(data) // 2
+                        try:
+                            samples = struct.unpack("<%dh" % n, data)
+                        except struct.error:
+                            # Corrupt chunk — drop it, don't kill the pump.
+                            continue
+                        for i, s in enumerate(samples):
+                            accum[i] += s
+                    # Saturating clip to Int16. For N concurrent speakers
+                    # the sum can exceed the range; clipping is quicker
+                    # than tracking N and is imperceptible in brief overlap.
+                    out = array.array("h", [
+                        32767 if s > 32767 else (-32768 if s < -32768 else s)
+                        for s in accum
+                    ])
+                    payload = out.tobytes()
                 try:
                     wrote = self._talk_io.write(payload)
                 except Exception:
@@ -671,7 +679,7 @@ class AudioEngine(QObject):
             # let it idle — bytesFree() stays at max and no CPU is wasted.
             if now_ms - self._last_data_ms < 1000.0:
                 try:
-                    wrote = self._talk_io.write(b"\x00" * TALK_CHUNK_B)
+                    wrote = self._talk_io.write(_TALK_SILENCE)
                 except Exception:
                     self._talk_io = None
                     break
@@ -719,6 +727,15 @@ def _resample_int16le(data: bytes, src_sr: int, dst_sr: int) -> bytes:
     n_src = len(data) // 2
     if n_src < 2:
         return data
+    # Fast path for integer downsample ratios (48000→16000 is what
+    # browsers send when they refuse the 16 kHz AudioContext hint):
+    # array slicing decimates in C instead of a per-sample Python loop.
+    # Quality matches the general path below — neither applies a
+    # low-pass filter, and for near-field speech that's fine.
+    if src_sr > dst_sr and src_sr % dst_sr == 0:
+        arr = array.array("h")
+        arr.frombytes(data[:n_src * 2])
+        return arr[::src_sr // dst_sr].tobytes()
     samples = struct.unpack("<%dh" % n_src, data)
     ratio = src_sr / dst_sr
     n_dst = max(1, int(n_src / ratio))

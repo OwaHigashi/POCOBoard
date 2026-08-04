@@ -208,6 +208,11 @@ class MarqueeEngine:
         self.base_font = QFont(base_font)
         self.tracks: list[Track] = []
         self._metrics_cache: dict[tuple, QFontMetricsF] = {}
+        # QFont per size_scale — _font_at used to construct a fresh QFont
+        # for every run on every painted frame (60 fps × runs).  The set
+        # of distinct size scales is tiny (small/normal/big), so cache
+        # them; cleared alongside the tracks when the global scale moves.
+        self._font_cache: dict[float, QFont] = {}
         # Global size multiplier set by the operator (50%–500% in the UI,
         # 0.5..5.0 here).  Applied on top of per-run <small>/<big> scaling.
         self.scale: float = 1.0
@@ -226,11 +231,15 @@ class MarqueeEngine:
             return
         self.scale = new
         self.tracks.clear()
+        self._font_cache.clear()
 
     # --- measurement ---
     def _font_at(self, scale: float) -> QFont:
-        f = QFont(self.base_font)
-        f.setPixelSize(max(8, int(self.base_font.pixelSize() * scale * self.scale)))
+        f = self._font_cache.get(scale)
+        if f is None:
+            f = QFont(self.base_font)
+            f.setPixelSize(max(8, int(self.base_font.pixelSize() * scale * self.scale)))
+            self._font_cache[scale] = f
         return f
 
     def _metrics(self, font: QFont) -> QFontMetricsF:

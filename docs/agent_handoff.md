@@ -1,6 +1,6 @@
 # Agent Handoff
 
-Updated: 2026-08-04 (camera default mode + split FX / external volume)
+Updated: 2026-08-04 (performance pass + camera default mode + split volume)
 
 ## Summary
 
@@ -816,4 +816,100 @@ with the video path now).
   offscreen), device hot-unplug while running (QCamera errorOccurred
   just logs; feed freezes on last frame until操作), OBS virtual camera
   enumeration on the deploy host.
+
+## Performance pass (2026-08-04)
+
+Whole-app review for CPU waste; boot-time FX synthesis was measured at
+0.56 s total and left alone (disk-caching it isn't worth the
+complexity).  Changes, highest impact first:
+
+### 1. Conditional repaint (display_window.py)
+
+`_tick` used to call `self.update()` unconditionally at 60 fps —
+full-window repaints forever, even on a static idle screen.  Now it
+repaints only when:
+- an animation is live (`_scene`, `_piano_scene`, marquee tracks,
+  title fade in progress), or
+- a new camera/video frame arrived (`_frame_dirty`, set by the two
+  sink callbacks), or
+- a state-changing slot marked `_dirty` (set in `_mark_activity`,
+  stop_marquee, image/video clear paths, clear_display, camera
+  crop/opacity/portrait setters; scene-death and last-marquee-gone
+  transitions set it inside `_tick` so the final erase frame paints).
+
+Fallback: a ~2 Hz heartbeat repaint when idle, so the tiny status
+footer stays fresh and ANY missed invalidation self-heals within
+500 ms — that's the safety net that makes the gating low-risk.  Idle
+= 2 paints/s (was 60); camera mode = capture rate (~30).
+
+**Rule for future slots**: any new visual-state mutation must either
+set `self._dirty = True` or call `self.update()` directly; worst case
+the heartbeat covers you for half a second.
+
+### 2. Frame/photo scaling caches (display_window.py)
+
+- `_cached_frame_pixmap(img, crop, dw, dh)` — single-slot cache keyed
+  on `QImage.cacheKey()` + crop + size.  Camera portrait crop, camera
+  letterbox, and video letterbox all go through it: the crop / scale /
+  QImage→QPixmap conversion now happens once per *frame* (~30 fps)
+  instead of once per *paint* (60 fps when marquee/FX overlay).
+  Invalidation is automatic (cacheKey changes per frame); cleared on
+  video stop / camera stop for memory hygiene.
+- `_draw_bg_image` caches the letterboxed photo scaled to screen size
+  (`_bg_cache_*`), now with SmoothTransformation — the old code
+  fast-rescaled the full-resolution pixmap on every single paint; the
+  new one smooth-scales once per (photo, size) and blits.  Better
+  quality AND ~free repaints.
+
+### 3. Hidden-camera conversion skip (display_window.py)
+
+`_on_camera_frame` returns before `frame.toImage()` while the camera
+is occluded (piano mode / video / image showing).  The feed stays
+open; visibility returns within one capture frame.  Saves a constant
+~30 fps full-frame conversion during uploads and piano sessions.
+
+### 4. TALK resample fast path (audio.py)
+
+`_resample_int16le` decimates via `array[::step]` when
+`src_sr % dst_sr == 0` (the 48000→16000 case browsers actually
+produce when they ignore the 16 kHz AudioContext hint).  Measured
+0.006 ms vs 0.528 ms per 200 ms chunk (~90x) — this runs on the Qt
+main thread per received TALK chunk, so it directly reduces UI-thread
+load with many talkers.  Non-integer ratios keep the linear-interp
+loop.  Neither path filters (unchanged behavior).
+
+### 5. Single-speaker mixer fast path (audio.py)
+
+`_pump` now collects ready chunks first; with exactly one active
+stream (the overwhelmingly common case) the chunk is written as-is
+(zero-padded to 640 B) — no unpack, no accumulate, no clip, no
+re-pack.  ≥2 speakers use the original mix+saturate path over the
+collected chunks.  Silence keep-warm chunk is a module constant
+(`_TALK_SILENCE`) instead of a per-tick allocation.
+
+### 6. Marquee micro-opts (marquee.py / display_window.py)
+
+- `_font_at` caches QFont per size_scale (was: fresh QFont per run
+  per painted frame).  Cache cleared in `set_scale` with the tracks.
+- `marqueeStatusChanged` emits only when (used, max) actually changes
+  (was: every tick while anything scrolled → 60 Hz signal + locked
+  bridge write).
+
+### Verification
+
+- `py_compile` all touched modules — clean.
+- `test_perf_changes.py` (scratchpad): 48k→16k fast path bit-exact vs
+  decimation reference, non-integer path length check, passthrough
+  identity; real-AudioEngine pump exercised through both the
+  single-speaker and 2-speaker paths.
+- `test_repaint_gate.py` (scratchpad): real DisplayWindow with
+  hand-driven `_tick` — 20 idle ticks → 0 repaints, heartbeat fires
+  at 500 ms, dirty→exactly one repaint, camera frame→repaint, FX→
+  repaint every tick, marquee→repaints, status signal emits once for
+  repeated identical values.
+- Camera overlay render test + split-volume test re-run — still green.
+- Live offscreen boot — clean, camera auto-starts.
+- Not measured on real hardware: actual CPU% delta on the deploy rig
+  (offscreen host lacks RHI; the paint savings should be larger with
+  a real 4K display window).
 

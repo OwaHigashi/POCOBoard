@@ -17,7 +17,7 @@ import os
 import time
 from typing import Optional
 
-from PySide6.QtCore       import QRect, QRectF, QPointF, Qt, QTimer, QUrl, Signal, Slot
+from PySide6.QtCore       import QRectF, QPointF, Qt, QTimer, QUrl, Signal, Slot
 from PySide6.QtGui        import QColor, QFont, QFontMetricsF, QImage, QImageReader, QKeyEvent, QPainter, QPen, QPixmap
 from PySide6.QtMultimedia import (
     QAudioOutput, QCamera, QCameraDevice, QMediaCaptureSession, QMediaDevices,
@@ -57,6 +57,29 @@ class DisplayWindow(QWidget):
         self._last_ns = time.perf_counter_ns()
         self._cursor_hidden = False
         self._status_text_cb = status_text_cb    # () -> str|None, for the idle footer
+
+        # Repaint gating — the 16 ms tick only schedules a repaint when
+        # something on screen can actually have changed: an animation is
+        # running, a new camera/video frame arrived (_frame_dirty), or a
+        # state-changing slot requested one (_dirty).  A slow heartbeat
+        # repaint (~2 Hz) keeps the tiny status footer fresh and
+        # self-heals any missed invalidation.  Idle sessions drop from
+        # 60 full-window paints per second to 2.
+        self._dirty: bool = True
+        self._frame_dirty: bool = False
+        self._heartbeat_ms: float = 0.0
+        self._last_mq_status: Optional[tuple[int, int]] = None
+        # Single-slot cache of the letterboxed/cropped frame scaled to its
+        # on-screen size — (key, QPixmap).  Frames arrive at camera/video
+        # rate (~30 fps) while paints can run at 60 fps (marquee over
+        # video etc.); caching halves the scaling work and skips the
+        # QImage→backing-store conversion on repeat paints.
+        self._frame_cache_key: Optional[tuple] = None
+        self._frame_cache_pm: Optional[QPixmap] = None
+        # Same idea for the static photo background (scaled smoothly once
+        # per size instead of fast-scaled on every paint).
+        self._bg_cache_key: Optional[tuple] = None
+        self._bg_cache_pm: Optional[QPixmap] = None
 
         self._timer = QTimer(self)
         self._timer.setTimerType(Qt.TimerType.PreciseTimer)
@@ -169,6 +192,7 @@ class DisplayWindow(QWidget):
         self._last_activity_ms = time.perf_counter_ns() / 1_000_000.0
         self._show_idle_title = False
         self._title_fade = 0.0
+        self._dirty = True
 
     @Slot()
     def mark_talk_activity(self) -> None:
@@ -196,10 +220,16 @@ class DisplayWindow(QWidget):
     def stop_marquee(self) -> None:
         self._marquee.stop_all()
         self._emit_marquee_status()
+        self._dirty = True
 
     def _emit_marquee_status(self) -> None:
-        self.marqueeStatusChanged.emit(
-            self._marquee.lanes_in_use(), self._marquee.max_lanes())
+        # Emit only on change — this used to fire at 60 Hz while any
+        # marquee was scrolling, pushing a cross-object signal + a locked
+        # bridge update per tick for a value that rarely changes.
+        cur = (self._marquee.lanes_in_use(), self._marquee.max_lanes())
+        if cur != self._last_mq_status:
+            self._last_mq_status = cur
+            self.marqueeStatusChanged.emit(*cur)
 
     # ---------- screen targeting ----------
     def place_on_screen(self, screen_idx: int, fullscreen: bool,
@@ -285,31 +315,37 @@ class DisplayWindow(QWidget):
     @Slot(float)
     def set_camera_fx_opacity(self, opacity: float) -> None:
         self._camera_fx_opacity = max(0.0, min(1.0, float(opacity)))
+        self._dirty = True
 
     @Slot(float)
     def set_camera_marquee_opacity(self, opacity: float) -> None:
         self._camera_marquee_opacity = max(0.0, min(1.0, float(opacity)))
+        self._dirty = True
 
     @Slot(bool)
     def set_camera_portrait(self, on: bool) -> None:
         """Toggle the 9:16 portrait crop (True) vs full-frame letterbox."""
         self._camera_portrait = bool(on)
+        self._dirty = True
 
     @Slot(float)
     def set_camera_crop_cx(self, frac: float) -> None:
         """Crop-window center X as a fraction (0.0..1.0) of frame width."""
         self._camera_crop_cx = max(0.0, min(1.0, float(frac)))
+        self._dirty = True
 
     @Slot(float)
     def set_camera_crop_cy(self, frac: float) -> None:
         """Crop-window center Y as a fraction (0.0..1.0) of frame height."""
         self._camera_crop_cy = max(0.0, min(1.0, float(frac)))
+        self._dirty = True
 
     @Slot(float)
     def set_camera_crop_zoom(self, zoom: float) -> None:
         """Crop magnification: 1.0 = the largest 9:16 window that fits the
         source frame; 2.0 = half that window (2x magnified), etc."""
         self._camera_crop_zoom = max(1.0, min(8.0, float(zoom)))
+        self._dirty = True
 
     @Slot(bool)
     def set_camera_mode(self, on: bool) -> None:
@@ -399,6 +435,8 @@ class DisplayWindow(QWidget):
             self._camera_sink.deleteLater()
             self._camera_sink = None
         self._latest_camera_image = None
+        self._frame_cache_key = None
+        self._frame_cache_pm = None
 
     def _on_camera_frame(self, frame) -> None:
         # Same cheap path as the video sink: drop invalid frames so a
@@ -406,10 +444,18 @@ class DisplayWindow(QWidget):
         # black-flashing.  paintEvent picks the image up on the next tick.
         if frame is None or not frame.isValid():
             return
+        # While the camera is hidden behind an upload or the piano roll,
+        # skip the per-frame QImage conversion entirely — it's pure CPU
+        # burn for pixels nobody sees.  The feed stays open, so the next
+        # frame after the camera becomes visible again (~1/30 s later)
+        # refreshes the picture.
+        if self._piano_mode or self._video_active or self._bg_image is not None:
+            return
         img = frame.toImage()
         if img is None or img.isNull():
             return
         self._latest_camera_image = img
+        self._frame_dirty = True
 
     def _on_camera_error(self, err, msg) -> None:
         print(f"[camera] error {err}: {msg}")
@@ -489,6 +535,9 @@ class DisplayWindow(QWidget):
         self._image_timer.stop()
         self._bg_image = None
         self._bg_caption = ""
+        self._bg_cache_key = None
+        self._bg_cache_pm = None
+        self._dirty = True
         if self._bg_image_owner:
             self._bg_image_owner = ""
             self.ownershipChanged.emit("image", "")
@@ -529,8 +578,9 @@ class DisplayWindow(QWidget):
         if img is None or img.isNull():
             return
         self._latest_video_image = img
-        # No explicit update() — _tick fires self.update() at 60 fps and
-        # will pick this frame up on the next paint.
+        # No explicit update() — _tick repaints on the next 16 ms tick
+        # when it sees the dirty flag.
+        self._frame_dirty = True
 
     @Slot(str)
     @Slot(str, str)
@@ -630,6 +680,9 @@ class DisplayWindow(QWidget):
         self._video_active = False
         self._video_url = None
         self._latest_video_image = None
+        self._frame_cache_key = None
+        self._frame_cache_pm = None
+        self._dirty = True
         if self._video_owner:
             self._video_owner = ""
             self.ownershipChanged.emit("video", "")
@@ -682,6 +735,7 @@ class DisplayWindow(QWidget):
         # operator explicitly asked for "quiet black" after clearing.
         self._show_idle_title = False
         self._title_fade = 0.0
+        self._dirty = True
         # Preserve the 5-minute idle timer rather than restarting it.
 
     def resizeEvent(self, ev) -> None:
@@ -731,6 +785,7 @@ class DisplayWindow(QWidget):
         if self._scene is not None:
             if not self._scene.update(dt_ms):
                 self._scene = None
+                self._dirty = True   # paint once more to erase FX remnants
         if self._piano_scene is not None:
             try:
                 self._piano_scene.update(dt_ms)
@@ -741,6 +796,8 @@ class DisplayWindow(QWidget):
         if self._marquee.tracks:
             self._marquee.step(dt_ms)
             self._emit_marquee_status()
+            if not self._marquee.tracks:
+                self._dirty = True   # last message left — erase it
 
         # Idle-return: after a quiet period, fade the title back in.
         if not self._show_idle_title and self._last_activity_ms > 0:
@@ -752,7 +809,22 @@ class DisplayWindow(QWidget):
             # 1.2 s ease-in from black to the branded screen.
             self._title_fade = min(1.0, self._title_fade + dt_ms / 1200.0)
 
-        self.update()
+        animating = (self._scene is not None
+                     or self._piano_scene is not None
+                     or bool(self._marquee.tracks)
+                     or (self._show_idle_title and self._title_fade < 1.0))
+        if animating or self._dirty or self._frame_dirty:
+            self._dirty = False
+            self._frame_dirty = False
+            self._heartbeat_ms = 0.0
+            self.update()
+        else:
+            # Nothing moving: repaint at ~2 Hz so the footer stays fresh
+            # and any missed invalidation heals itself within 500 ms.
+            self._heartbeat_ms += dt_ms
+            if self._heartbeat_ms >= 500.0:
+                self._heartbeat_ms = 0.0
+                self.update()
 
     def paintEvent(self, ev) -> None:
         p = QPainter(self)
@@ -863,18 +935,18 @@ class DisplayWindow(QWidget):
         crop_w = crop_h * 9.0 / 16.0
         sx = min(max(self._camera_crop_cx * iw - crop_w / 2.0, 0.0), iw - crop_w)
         sy = min(max(self._camera_crop_cy * ih - crop_h / 2.0, 0.0), ih - crop_h)
-        src = QRectF(sx, sy, crop_w, crop_h)
         # Destination: a 720x1280-proportioned portrait rect fitted to the
         # window and centered.  Same 9:16 aspect as the source rect, so
-        # drawImage scales X and Y by the identical factor (no stretch).
+        # the scale factor is identical for X and Y (no stretch).
         scale = min(w / 720.0, h / 1280.0)
-        dw = 720.0 * scale
-        dh = 1280.0 * scale
-        dst = QRectF((w - dw) / 2.0, (h - dh) / 2.0, dw, dh)
-        p.drawImage(dst, img, src)
+        dw = max(1, int(720.0 * scale))
+        dh = max(1, int(1280.0 * scale))
+        pm = self._cached_frame_pixmap(
+            img, (int(sx), int(sy), max(1, int(crop_w)), max(1, int(crop_h))),
+            dw, dh)
+        p.drawPixmap((w - dw) // 2, (h - dh) // 2, pm)
 
-    @staticmethod
-    def _draw_letterboxed(p: QPainter, w: int, h: int,
+    def _draw_letterboxed(self, p: QPainter, w: int, h: int,
                           img: Optional[QImage]) -> None:
         if img is None or img.isNull():
             return
@@ -886,7 +958,30 @@ class DisplayWindow(QWidget):
         dh = max(1, int(ih * scale))
         dx = (w - dw) // 2
         dy = (h - dh) // 2
-        p.drawImage(QRect(dx, dy, dw, dh), img)
+        p.drawPixmap(dx, dy, self._cached_frame_pixmap(img, None, dw, dh))
+
+    def _cached_frame_pixmap(self, img: QImage, crop: Optional[tuple],
+                             dw: int, dh: int) -> QPixmap:
+        """Crop + scale `img` to (dw, dh), cached until the frame changes.
+
+        Frames arrive at capture rate (~30 fps) but paints can run at
+        60 fps (e.g. marquee scrolling over the camera feed).  Keying on
+        QImage.cacheKey() means the crop/scale/convert work happens once
+        per *frame*, not once per *paint* — repeat paints just blit the
+        cached QPixmap.  Single slot: only one live frame source (camera
+        or video) is ever the visual base at a time.
+        """
+        key = (img.cacheKey(), crop, dw, dh)
+        if key == self._frame_cache_key and self._frame_cache_pm is not None:
+            return self._frame_cache_pm
+        src = img if crop is None else img.copy(*crop)
+        scaled = src.scaled(dw, dh,
+                            Qt.AspectRatioMode.IgnoreAspectRatio,
+                            Qt.TransformationMode.FastTransformation)
+        pm = QPixmap.fromImage(scaled)
+        self._frame_cache_key = key
+        self._frame_cache_pm = pm
+        return pm
 
     def _draw_bg_image(self, p: QPainter, w: int, h: int) -> None:
         pm = self._bg_image
@@ -898,11 +993,25 @@ class DisplayWindow(QWidget):
         avail_w = max(1, w - 2 * margin)
         avail_h = max(1, h - 2 * margin)
         scale = min(avail_w / pw, avail_h / ph)
-        dw = int(pw * scale)
-        dh = int(ph * scale)
+        dw = max(1, int(pw * scale))
+        dh = max(1, int(ph * scale))
         dx = (w - dw) // 2
         dy = (h - dh) // 2
-        p.drawPixmap(dx, dy, dw, dh, pm)
+        # Scale the (potentially multi-megapixel) photo once per size and
+        # reuse — the previous per-paint `drawPixmap(dx, dy, dw, dh, pm)`
+        # rescaled the full-resolution pixmap on every repaint (60 fps
+        # while a marquee scrolls over it).  Smooth transformation is
+        # affordable here precisely because it runs once, and it looks
+        # noticeably better on downscaled photos than the painter's fast
+        # path did.
+        key = (pm.cacheKey(), dw, dh)
+        if key != self._bg_cache_key or self._bg_cache_pm is None:
+            self._bg_cache_key = key
+            self._bg_cache_pm = pm.scaled(
+                dw, dh,
+                Qt.AspectRatioMode.IgnoreAspectRatio,
+                Qt.TransformationMode.SmoothTransformation)
+        p.drawPixmap(dx, dy, self._bg_cache_pm)
         if self._bg_caption:
             cap_px = max(18, int(h * 0.028))
             f = QFont("Segoe UI Variable Text", 0)
