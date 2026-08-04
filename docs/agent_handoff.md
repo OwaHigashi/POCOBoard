@@ -1,6 +1,6 @@
 # Agent Handoff
 
-Updated: 2026-08-05 (DirectShow backend for ManyCam/OBS virtual cams)
+Updated: 2026-08-05 (anamorphic portrait corrections + DirectShow cams)
 
 ## Summary
 
@@ -1024,4 +1024,67 @@ unchecking 縦型クロップ; this change makes that automatic.
 - Verified: ManyCam select → crop OFF, USB cam → ON (config),
   overrides remembered independently per device across switches;
   camera-overlay regression green; live boot green.
+
+## Anamorphic portrait corrections (2026-08-05)
+
+User setup: a capture board reports 1920x1080 but the real picture is
+portrait 1080x1920 squeezed into that frame (looks つぶれて).  Their
+mental model, implemented literally: compose the base screen at
+1080x1920 proportions, stretch it to 1920x1080 on output, and the
+downstream chain's squeeze restores true proportions.  Follow-up
+requirement: 「全ての描画をこの引き延ばしに対応する必要があります」 —
+EVERY layer, not just the camera, must go through the stretch.
+
+Two independent, composable features:
+
+### 1. Camera ingest un-squeeze (per-device) — `縦横補正`
+
+- `display_window.py`: `_ingest_camera_frame(img)` is now the single
+  ingest point for BOTH camera backends (Qt sink callback + dshow
+  tick-poll).  When `_camera_swap_aspect` is on it restretches the
+  frame to its transposed size (1920x1080 → 1080x1920,
+  IgnoreAspectRatio on purpose — the non-uniform scale IS the fix);
+  corners stay corners (no rotation).
+- Preference model identical to the portrait crop: per-device operator
+  memory (`_camera_swap_pref`) > config default
+  (`camera_swap_aspect`, default false) via `set_camera_swap_aspect` /
+  `set_camera_swap_default`, recomputed in `_apply_camera_crop_pref`
+  on device switches.
+- UI: `縦横補正` checkbox in the camera box crop row; synced (without
+  recording a pref) by `_sync_camera_portrait_checkbox`.
+
+### 2. Whole-output portrait stretch (global) — `縦型出力補正`
+
+- `display_window.py`: `_virtual_size()` returns the composition size
+  — (w, h) normally, transposed (h, w) when `_output_stretch` is on.
+  paintEvent applies `p.scale(width/vw, height/vh)` and every layer
+  below just draws into the virtual (w, h); the transform stretches
+  the finished composition onto the physical window.  All layout
+  entry points now use `_virtual_size()`: `trigger_fx` (make_scene),
+  `add_marquee`, `set_piano_mode` (PianoRollScene), `resizeEvent`.
+- `set_output_stretch(on)` clears in-flight marquee tracks (laid out
+  against the old geometry — same policy as marquee size changes) and
+  resizes the piano scene.
+- Config `display_portrait_stretch` (default false); live checkbox in
+  the 表示 tab (row 4, above the media hint; camera box moved to row
+  6, piano 7, stretch row 8).
+- Note the two features compose: capture-board camera (squeezed
+  portrait) + portrait output chain wants BOTH — swap makes the frame
+  truly 9:16, which then letterboxes full-bleed into the 9:16 virtual
+  canvas, and the output stretch maps it onto the 16:9 signal.
+
+### Verification
+
+- Offscreen test (`test_stretch.py`): ingest swap produces 1080x1920
+  with corners preserved; with swap+stretch a squeezed 4-quadrant
+  frame fills the whole 1600x900 window (all four quadrants at the
+  window corners — nothing cut); CHEER FX and a marquee render under
+  the transform without error; stretch-off restores the normal canvas;
+  per-device swap memory independent of the crop pref.
+- Regressions green: camera overlay, crop policy, repaint gate.
+  Live boot green.
+- Not verified on real hardware: the actual capture-board chain and
+  the physically-portrait output display (needs the deploy rig).
+  Fonts/AA under the non-uniform transform look fine in offscreen
+  grabs but deserve an eyeball on the real 4K output.
 

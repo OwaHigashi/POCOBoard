@@ -837,6 +837,22 @@ class ControlWindow(QWidget):
         self.spImageSec.valueChanged.connect(self._on_image_sec_changed)
         dl.addWidget(self.spImageSec, 3, 1, 1, 2)
 
+        # Whole-output portrait stretch: compose everything at 9:16 and
+        # stretch onto the 16:9 signal (for physically-portrait outputs
+        # driven with a landscape signal).
+        self.chkOutputStretch = QCheckBox(
+            "縦型出力補正 — 画面全体を 9:16 (1080x1920) で構成し、"
+            "16:9 (1920x1080) に引き延ばして出力")
+        self.chkOutputStretch.setChecked(self.display.is_output_stretch())
+        self.chkOutputStretch.setToolTip(
+            "出力先が実際には縦型 (1080x1920) なのに 1920x1080 の信号で駆動される\n"
+            "構成向け。カメラ・写真・動画・エフェクト・飛ぶ文字・ピアノロールの\n"
+            "すべてを縦比率で構成してから横に引き延ばすので、出力チェーンで\n"
+            "圧縮され直すと正しい比率に戻ります。切替時、流れている文字は\n"
+            "一旦クリアされます。")
+        self.chkOutputStretch.toggled.connect(self._on_output_stretch_toggled)
+        dl.addWidget(self.chkOutputStretch, 4, 0, 1, 3)
+
         hint = QLabel(
             "※ リモートからアップロードされた画像/動画/音声は自動で背景になります。"
             " 画像は設定秒数で自動消去、動画/音声は config の media_min_play_sec (既定 60 秒)"
@@ -844,18 +860,24 @@ class ControlWindow(QWidget):
             " 強制停止は「停止」ボタンで。")
         hint.setProperty("class", "small")
         hint.setWordWrap(True)
-        dl.addWidget(hint, 4, 0, 1, 3)
+        dl.addWidget(hint, 5, 0, 1, 3)
 
         # ---- Live camera (USB / virtual camera) ----
         camera_box = self._build_camera_box()
-        dl.addWidget(camera_box, 5, 0, 1, 3)
+        dl.addWidget(camera_box, 6, 0, 1, 3)
 
         # ---- Piano roll (USB MIDI) ----
         piano_box = self._build_piano_box()
-        dl.addWidget(piano_box, 6, 0, 1, 3)
+        dl.addWidget(piano_box, 7, 0, 1, 3)
 
-        dl.setRowStretch(7, 1)
+        dl.setRowStretch(8, 1)
         return w
+
+    def _on_output_stretch_toggled(self, on: bool) -> None:
+        self.display.set_output_stretch(on)
+        self._log_local("ADMIN",
+                        "縦型出力補正 ON (全描画を 9:16 構成 → 16:9 伸長出力)"
+                        if on else "縦型出力補正 OFF")
 
     # ---- live camera (USB / virtual camera) controls ----
     def _build_camera_box(self) -> QWidget:
@@ -935,6 +957,14 @@ class ControlWindow(QWidget):
             "OFF: カメラ映像全体をレターボックス表示")
         self.chkCamPortrait.toggled.connect(self._on_cam_portrait_toggled)
         crop_row.addWidget(self.chkCamPortrait)
+        self.chkCamSwap = QCheckBox("縦横補正")
+        self.chkCamSwap.setChecked(self.display._camera_swap_aspect)
+        self.chkCamSwap.setToolTip(
+            "キャプチャーボードが縦画面 (1080x1920) を横フレーム (1920x1080) に\n"
+            "押し込んで送ってくる場合の補正。フレームを縦横入れ替えたサイズに\n"
+            "引き伸ばし直して、つぶれを元に戻します。カメラごとに記憶されます。")
+        self.chkCamSwap.toggled.connect(self._on_cam_swap_toggled)
+        crop_row.addWidget(self.chkCamSwap)
         crop_row.addSpacing(8)
         crop_row.addWidget(QLabel("位置X:"))
         self.spCamCropX = QSpinBox()
@@ -1032,12 +1062,15 @@ class ControlWindow(QWidget):
                         else f"カメラ切替失敗: {name}")
 
     def _sync_camera_portrait_checkbox(self) -> None:
-        """Reflect the display's effective crop mode without recording it
-        as an operator preference (device switches recompute it:
-        per-device memory > virtual-camera full-frame default)."""
+        """Reflect the display's effective crop / swap modes without
+        recording them as operator preferences (device switches
+        recompute them: per-device memory > defaults)."""
         self.chkCamPortrait.blockSignals(True)
         self.chkCamPortrait.setChecked(self.display._camera_portrait)
         self.chkCamPortrait.blockSignals(False)
+        self.chkCamSwap.blockSignals(True)
+        self.chkCamSwap.setChecked(self.display._camera_swap_aspect)
+        self.chkCamSwap.blockSignals(False)
 
     def _on_camera_toggle_clicked(self, checked: bool) -> None:
         self.display.set_camera_mode(checked)
@@ -1061,6 +1094,12 @@ class ControlWindow(QWidget):
         self._log_local("ADMIN",
                         "カメラ縦型 9:16 クロップ ON" if on
                         else "カメラ全体表示 (レターボックス)")
+
+    def _on_cam_swap_toggled(self, on: bool) -> None:
+        self.display.set_camera_swap_aspect(on)
+        self._log_local("ADMIN",
+                        "カメラ縦横補正 ON (フレームを縦横入替サイズへ伸長)"
+                        if on else "カメラ縦横補正 OFF")
 
     def _on_cam_crop_changed(self, _v: int) -> None:
         self.display.set_camera_crop_cx(self.spCamCropX.value() / 100.0)

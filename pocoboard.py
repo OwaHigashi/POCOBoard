@@ -108,6 +108,12 @@ def main() -> int:
     camera_crop_cx   = cfg.get_int("camera_crop_cx_pct", 50)
     camera_crop_cy   = cfg.get_int("camera_crop_cy_pct", 50)
     camera_crop_zoom = cfg.get_int("camera_crop_zoom_pct", 100)
+    # Anamorphic corrections for portrait signal chains: camera_swap_aspect
+    # un-squeezes camera frames whose true shape is transposed;
+    # display_portrait_stretch composes the WHOLE output at 9:16 and
+    # stretches it onto the 16:9 signal.
+    camera_swap      = cfg.get_bool("camera_swap_aspect", False)
+    output_stretch   = cfg.get_bool("display_portrait_stretch", False)
     piano_pps     = cfg.get_int("piano_scroll_pps", 110)
     piano_fx_op   = cfg.get_int("piano_fx_opacity_pct", 55)
     piano_img_op  = cfg.get_int("piano_image_opacity_pct", 35)
@@ -178,6 +184,8 @@ def main() -> int:
     # (ManyCam / OBS via the DirectShow backend) default to full-frame —
     # their picture is already composed, cropping it would slice the sides.
     display.set_camera_portrait_default(camera_portrait)
+    display.set_camera_swap_default(camera_swap)
+    display.set_output_stretch(output_stretch)
     display.set_camera_crop_cx(max(0, min(100, camera_crop_cx)) / 100.0)
     display.set_camera_crop_cy(max(0, min(100, camera_crop_cy)) / 100.0)
     display.set_camera_crop_zoom(max(100, min(800, camera_crop_zoom)) / 100.0)

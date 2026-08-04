@@ -209,6 +209,28 @@ class DisplayWindow(QWidget):
         # (qt/physical → config default, dshow/virtual → full frame).
         self._camera_portrait_default: bool = True
         self._camera_crop_pref: dict[str, bool] = {}
+        # Aspect-swap correction.  Some capture boards deliver a portrait
+        # screen (true shape 1080x1920) anamorphically squeezed into a
+        # landscape 1920x1080 frame — displayed as-is it looks squashed.
+        # When enabled, incoming frames are restretched to HxW (the
+        # transposed size) at ingest, undoing the squeeze; everything
+        # downstream (crop / letterbox / caches) then sees a真の portrait
+        # frame.  Same preference model as the crop: per-device operator
+        # choice > config default.
+        self._camera_swap_aspect:  bool = False
+        self._camera_swap_default: bool = False
+        self._camera_swap_pref: dict[str, bool] = {}
+
+        # --- whole-output portrait stretch ---
+        # For signal chains where the DISPLAY side is really portrait
+        # (e.g. 1080x1920) but is driven with a landscape 1920x1080
+        # signal: compose EVERY layer (camera / image / video / FX /
+        # marquee / piano roll / idle title) on a transposed virtual
+        # canvas (h x w) and anamorphically stretch the finished frame
+        # onto the physical window.  The downstream squeeze then restores
+        # true proportions.  Implemented as a painter scale transform in
+        # paintEvent — no offscreen buffer needed.
+        self._output_stretch: bool = False
 
     # ---------- activity tracking ----------
     def _mark_activity(self) -> None:
@@ -227,18 +249,51 @@ class DisplayWindow(QWidget):
         'someone is using this' so the title shouldn't reappear mid-chat."""
         self._mark_activity()
 
+    # ---------- virtual canvas (output-stretch aware) ----------
+    def _virtual_size(self) -> tuple[int, int]:
+        """Logical composition size.  Equal to the window size normally;
+        transposed (h, w) when the portrait output stretch is active —
+        every layer is laid out against THIS size and paintEvent
+        stretches the finished composition onto the physical window."""
+        w = max(1, self.width())
+        h = max(1, self.height())
+        if self._output_stretch:
+            return h, w
+        return w, h
+
+    @Slot(bool)
+    def set_output_stretch(self, on: bool) -> None:
+        """Compose the whole screen at transposed (portrait) proportions
+        and stretch the result onto the landscape output signal."""
+        on = bool(on)
+        if on == self._output_stretch:
+            return
+        self._output_stretch = on
+        vw, vh = self._virtual_size()
+        # In-flight marquee tracks were laid out against the old canvas
+        # geometry — clear them (same policy as marquee size changes).
+        self._marquee.stop_all()
+        self._emit_marquee_status()
+        if self._piano_scene is not None:
+            self._piano_scene.resize(vw, vh)
+        self._dirty = True
+
+    def is_output_stretch(self) -> bool:
+        return self._output_stretch
+
     # ---------- public slots (called from any thread via QueuedConnection) ----------
     @Slot(str)
     def trigger_fx(self, kind: str) -> None:
         self._marquee.stop_all()
         self._emit_marquee_status()
-        self._scene = make_scene(kind, max(1, self.width()), max(1, self.height()))
+        vw, vh = self._virtual_size()
+        self._scene = make_scene(kind, vw, vh)
         self._mark_activity()
 
     @Slot(str, int)
     def add_marquee(self, text: str, speed: int) -> str:
-        res = self._marquee.add(
-            text, max(1, self.width()), max(1, self.height()), speed)
+        vw, vh = self._virtual_size()
+        res = self._marquee.add(text, vw, vh, speed)
         self._emit_marquee_status()
         self._mark_activity()
         return res
@@ -396,8 +451,28 @@ class DisplayWindow(QWidget):
         self._camera_portrait_default = bool(on)
         self._apply_camera_crop_pref()
 
+    @Slot(bool)
+    def set_camera_swap_aspect(self, on: bool) -> None:
+        """Toggle the anamorphic un-squeeze for the current camera:
+        incoming frames are restretched to their transposed size (a
+        1920x1080-tagged frame becomes 1080x1920), undoing capture
+        boards that squeeze a portrait screen into a landscape frame.
+        Remembered per device like the crop choice."""
+        self._camera_swap_aspect = bool(on)
+        ident = self.current_camera_id()
+        if ident:
+            self._camera_swap_pref[ident] = self._camera_swap_aspect
+        self._dirty = True
+
+    @Slot(bool)
+    def set_camera_swap_default(self, on: bool) -> None:
+        """Boot-config default for the aspect-swap correction."""
+        self._camera_swap_default = bool(on)
+        self._apply_camera_crop_pref()
+
     def _apply_camera_crop_pref(self) -> None:
-        """Recompute the effective crop mode for the current device."""
+        """Recompute the effective crop + swap modes for the current
+        device (operator per-device memory > defaults)."""
         ident = self.current_camera_id()
         if ident and ident in self._camera_crop_pref:
             self._camera_portrait = self._camera_crop_pref[ident]
@@ -407,7 +482,24 @@ class DisplayWindow(QWidget):
             self._camera_portrait = False
         else:
             self._camera_portrait = self._camera_portrait_default
+        if ident and ident in self._camera_swap_pref:
+            self._camera_swap_aspect = self._camera_swap_pref[ident]
+        else:
+            self._camera_swap_aspect = self._camera_swap_default
         self._dirty = True
+
+    def _ingest_camera_frame(self, img: QImage) -> None:
+        """Common ingest for both camera backends: optional anamorphic
+        un-squeeze, then publish for the next paint."""
+        if self._camera_swap_aspect and img.width() > 1 and img.height() > 1:
+            # Restretch to the transposed size — X and Y scale by
+            # different factors on purpose; that is what undoes the
+            # capture board's squeeze.
+            img = img.scaled(img.height(), img.width(),
+                             Qt.AspectRatioMode.IgnoreAspectRatio,
+                             Qt.TransformationMode.FastTransformation)
+        self._latest_camera_image = img
+        self._frame_dirty = True
 
     @Slot(float)
     def set_camera_crop_cx(self, frac: float) -> None:
@@ -596,8 +688,7 @@ class DisplayWindow(QWidget):
         img = frame.toImage()
         if img is None or img.isNull():
             return
-        self._latest_camera_image = img
-        self._frame_dirty = True
+        self._ingest_camera_frame(img)
 
     def _on_camera_error(self, err, msg) -> None:
         print(f"[camera] error {err}: {msg}")
@@ -617,9 +708,9 @@ class DisplayWindow(QWidget):
             # semi-transparent overlays on top of the keyboard scene
             # (see paintEvent).  Triggers a repaint so the new base layer
             # appears immediately.
+            vw, vh = self._virtual_size()
             self._piano_scene = PianoRollScene(
-                max(1, self.width()), max(1, self.height()),
-                scroll_pps=self._piano_scroll_pps)
+                vw, vh, scroll_pps=self._piano_scroll_pps)
             self._mark_activity()
         else:
             # Release every held note and drop the scene.
@@ -883,7 +974,8 @@ class DisplayWindow(QWidget):
     def resizeEvent(self, ev) -> None:
         super().resizeEvent(ev)
         if self._piano_scene is not None:
-            self._piano_scene.resize(max(1, self.width()), max(1, self.height()))
+            vw, vh = self._virtual_size()
+            self._piano_scene.resize(vw, vh)
 
     def toggle_fullscreen(self) -> None:
         if self.isFullScreen():
@@ -956,8 +1048,7 @@ class DisplayWindow(QWidget):
                     print(f"[dshow] grab failed: {exc!r}")
                     img = None
                 if img is not None:
-                    self._latest_camera_image = img
-                    self._frame_dirty = True
+                    self._ingest_camera_frame(img)
 
         # Idle-return: after a quiet period, fade the title back in.
         if not self._show_idle_title and self._last_activity_ms > 0:
@@ -990,7 +1081,13 @@ class DisplayWindow(QWidget):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         p.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
-        w, h = self.width(), self.height()
+        # Compose against the virtual canvas.  With the portrait output
+        # stretch active the canvas is transposed (h x w) and a painter
+        # scale maps it anamorphically onto the physical window — every
+        # layer below is stretch-agnostic; it just draws into (w, h).
+        w, h = self._virtual_size()
+        if self._output_stretch:
+            p.scale(self.width() / w, self.height() / h)
 
         # Layer order (back → front).  Piano mode adds a piano-roll BASE
         # underneath everything; the visual slots (image / video) and
