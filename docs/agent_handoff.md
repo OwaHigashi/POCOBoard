@@ -1,6 +1,6 @@
 # Agent Handoff
 
-Updated: 2026-08-04 (performance pass + camera default mode + split volume)
+Updated: 2026-08-05 (DirectShow backend for ManyCam/OBS virtual cams)
 
 ## Summary
 
@@ -912,4 +912,90 @@ collected chunks.  Silence keep-warm chunk is a module constant
 - Not measured on real hardware: actual CPU% delta on the deploy rig
   (offscreen host lacks RHI; the paint savings should be larger with
   a real 4K display window).
+
+## DirectShow backend for ManyCam / OBS virtual cameras (2026-08-05)
+
+User report: USB カメラは認識するが ManyCam の出力が認識されない。
+
+### Root cause (verified on this host, Windows 11 build 26200)
+
+Qt 6 enumerates cameras via **Windows Media Foundation**, which only
+sees modern camera-category devices.  Probing this machine:
+- `QMediaDevices.videoInputs()` → 1 device (Live Streamer CAM 313)
+- DirectShow `ICreateDevEnum` → **5 devices**: the USB cam plus
+  ManyCam Virtual Webcam (driver-based, PnP class "Image"),
+  OBS Virtual Camera, NVIDIA Broadcast, Insta360 Virtual Camera.
+Driver/filter-based virtual webcams register only the legacy
+DirectShow/KS categories → invisible to MF/Qt by design.
+
+### Second discovery: SampleGrabber is dead on new Windows 11
+
+The classic DShow capture recipe (qedit.dll SampleGrabber +
+NullRenderer) NO LONGER WORKS on this build: qedit.dll ships but the
+classes are gone — CoCreateInstance → REGDB_E_CLASSNOTREG, and direct
+`DllGetClassObject` → CLASS_E_CLASSNOTAVAILABLE.  Do not resurrect
+that path.  Instead frames are pulled through a **windowless VMR9**
+(quartz.dll — same DLL as FilterGraph, cannot be absent):
+graph = source → VMR9(windowless, clipping hwnd = hidden 16x16
+QWidget with WA_DontShowOnScreen), poll
+`IVMRWindowlessControl9::GetCurrentImage` (packed 32bpp bottom-up DIB
+in CoTaskMem → QImage Format_RGB32 + vertical flip).  Verified: frame
+delivery CONTINUES with the hwnd hidden (checked frames differ over
+time with the real USB cam through this path), first frame ~50 ms,
+grab cost ~1 ms @480p / ~10 ms @1080p.
+
+### New module `dshow_camera.py` (pure ctypes COM, no pip deps)
+
+- `list_dshow_cameras()` → [(moniker_display_name, friendly_name)].
+  Moniker display name (`@device:pnp:...` / `@device:sw:...`) is the
+  stable unique id.
+- `DShowCamera.open(moniker_name)` / `grab() -> QImage | None` /
+  `close()`.  GUI-thread only (owns the hidden QWidget; COM STA).
+- All vtable slot indices are hand-counted and commented per call —
+  when editing, recount against the SDK headers; a wrong slot fails
+  silently or corrupts (the enum prototype originally called
+  ComposeWith instead of BindToStorage — symptom was "5 devices, all
+  names unreadable").
+
+### `display_window.py` integration
+
+- `available_cameras()` static → union [(ident, desc, backend)]:
+  Qt/MF devices first, then DShow-only ones (deduped by
+  case-insensitive name — same physical device appears in both).
+- `_camera_backend: 'qt'|'dshow'` + `_dshow_cam/_dshow_ident/_desc`.
+  `set_camera_device` resolves across the union (exact id →
+  description substring, Qt preferred); `current_camera_id/
+  description` are backend-aware; `_start_camera` dispatches, and
+  falls back to a DShow device if NO MF camera exists at all.
+- DShow is pull-based: `_tick` polls `grab()` every ≥33 ms, only
+  while camera is visible (same occlusion rule as the Qt sink skip)
+  → sets `_latest_camera_image` + `_frame_dirty`.  Everything
+  downstream (portrait crop, opacities, caches) is backend-agnostic.
+- `_stop_camera` closes the DShow graph too.
+
+### `control_window.py`
+
+Camera combo now lists `display.available_cameras()` (union) —
+QMediaDevices import dropped.  No UI shape change.
+
+### Verification
+
+- Standalone: ManyCam enumerated + opened, 1920x1080 "Please start
+  ManyCam" placeholder frame captured and visually confirmed (PNG),
+  30/30 sustained grabs, clean close.  Liveness proven via USB cam
+  through the same path (frames differ over 0.5 s).
+- End-to-end: DisplayWindow resolves "ManyCam" substring → dshow
+  backend, tick-poll delivers frames, full render (portrait crop
+  pipeline) shows ManyCam's background color at center, mode-off
+  releases the graph, switching back to "Live Streamer" flips to the
+  qt backend.
+- Regressions green: camera overlay render test, repaint-gate test.
+  Live boot unchanged (default = USB cam via Qt path).
+- Note: ManyCam placeholder ("Please start ManyCam") is what the
+  virtual cam outputs when the ManyCam app is closed — expected.
+- Not verified: behavior when ManyCam app starts/stops WHILE POCOBoard
+  is capturing (likely fine — the driver keeps streaming), long-run
+  stability of GetCurrentImage polling (~10 ms/frame @1080p on the
+  GUI thread; if it ever matters, decimate to 15 fps or move to a
+  worker thread).
 

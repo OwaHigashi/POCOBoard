@@ -12,7 +12,6 @@ import socket
 
 from PySide6.QtCore    import Qt, QTimer, Signal, Slot
 from PySide6.QtGui     import QFont, QGuiApplication
-from PySide6.QtMultimedia import QMediaDevices
 from PySide6.QtWidgets import (
     QApplication, QAbstractScrollArea, QCheckBox, QComboBox, QFileDialog,
     QFrame, QGridLayout, QGroupBox, QHBoxLayout, QLabel, QPushButton,
@@ -987,7 +986,9 @@ class ControlWindow(QWidget):
         return box
 
     def _refresh_camera_devices(self, emit_log: bool = True) -> None:
-        devices = QMediaDevices.videoInputs()
+        # Union list: Qt/Media-Foundation devices + DirectShow-only
+        # virtual cameras (ManyCam / OBS 等) that MF cannot see.
+        devices = self.display.available_cameras()
         current_id = self.display.current_camera_id()
         self.cbCameraDev.blockSignals(True)
         self.cbCameraDev.clear()
@@ -998,9 +999,8 @@ class ControlWindow(QWidget):
                 self._log_local("ADMIN", "カメラ一覧更新: 検出なし")
             return
         target_row = 0
-        for i, dev in enumerate(devices):
-            dev_id = bytes(dev.id()).decode("utf-8", "replace")
-            self.cbCameraDev.addItem(dev.description(), dev_id)
+        for i, (dev_id, desc, _backend) in enumerate(devices):
+            self.cbCameraDev.addItem(desc, dev_id)
             if current_id and dev_id == current_id:
                 target_row = i
         self.cbCameraDev.setCurrentIndex(target_row)

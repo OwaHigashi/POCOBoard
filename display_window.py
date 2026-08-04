@@ -28,6 +28,16 @@ from PySide6.QtWidgets    import QWidget
 from animations import ImageScene, PianoRollScene, Scene, make_scene
 from marquee    import MarqueeEngine
 
+# DirectShow fallback for cameras invisible to Qt/Media Foundation
+# (ManyCam Virtual Webcam, OBS Virtual Camera, ...).  Pure ctypes COM —
+# guarded import so an unexpected platform issue degrades to Qt-only.
+try:
+    from dshow_camera import DShowCamera, list_dshow_cameras
+    _DSHOW_AVAILABLE = True
+except Exception as _dshow_exc:   # pragma: no cover
+    print(f"[dshow] unavailable: {_dshow_exc!r}")
+    _DSHOW_AVAILABLE = False
+
 
 class DisplayWindow(QWidget):
     """Full-area canvas. Fullscreen-capable; no decorations when fullscreen."""
@@ -170,6 +180,15 @@ class DisplayWindow(QWidget):
         self._camera_sink:    Optional[QVideoSink] = None
         self._camera_device:  Optional[QCameraDevice] = None
         self._latest_camera_image: Optional[QImage] = None
+        # DirectShow fallback backend (ManyCam / OBS virtual cams that
+        # Media Foundation — and therefore QCamera — cannot see).
+        # backend 'qt' uses QCamera+QVideoSink push frames; 'dshow' polls
+        # DShowCamera.grab() from _tick at ~30 fps.
+        self._camera_backend: str = "qt"
+        self._dshow_cam:   Optional["DShowCamera"] = None
+        self._dshow_ident: str = ""
+        self._dshow_desc:  str = ""
+        self._dshow_poll_accum: float = 0.0
         self._camera_fx_opacity:      float = 0.55
         self._camera_marquee_opacity: float = 0.75
         # Portrait (9:16 = 720x1280) crop of the camera frame.  A typical
@@ -302,12 +321,39 @@ class DisplayWindow(QWidget):
     def is_camera_mode(self) -> bool:
         return self._camera_mode
 
+    @staticmethod
+    def available_cameras() -> list[tuple[str, str, str]]:
+        """Union of every capture device: [(ident, description, backend)].
+
+        Qt/Media-Foundation devices come first (ident = QCameraDevice
+        id).  DirectShow-only devices — ManyCam Virtual Webcam, OBS
+        Virtual Camera and friends, which MF cannot see — follow with
+        their moniker display name as ident.  DShow entries whose name
+        matches a Qt device are dropped (same hardware, Qt path wins).
+        """
+        out: list[tuple[str, str, str]] = []
+        qt_names: set[str] = set()
+        for dev in QMediaDevices.videoInputs():
+            ident = bytes(dev.id()).decode("utf-8", "replace")
+            out.append((ident, dev.description(), "qt"))
+            qt_names.add(dev.description().strip().lower())
+        if _DSHOW_AVAILABLE:
+            for ident, name in list_dshow_cameras():
+                if name.strip().lower() in qt_names:
+                    continue
+                out.append((ident, name, "dshow"))
+        return out
+
     def current_camera_id(self) -> str:
+        if self._camera_backend == "dshow":
+            return self._dshow_ident
         if self._camera_device is None or self._camera_device.isNull():
             return ""
         return bytes(self._camera_device.id()).decode("utf-8", "replace")
 
     def current_camera_description(self) -> str:
+        if self._camera_backend == "dshow":
+            return self._dshow_desc
         if self._camera_device is None or self._camera_device.isNull():
             return ""
         return self._camera_device.description()
@@ -363,45 +409,83 @@ class DisplayWindow(QWidget):
     def set_camera_device(self, ident: str) -> bool:
         """Select a capture device by id (exact) or description (substring).
 
-        Empty string picks the system default camera.  Virtual cameras
-        (OBS 等) show up in QMediaDevices.videoInputs() like any USB cam.
-        Returns True when a device was resolved; if camera mode is on the
-        feed is restarted on the new device immediately.
+        Empty string picks the system default camera.  Resolution spans
+        both backends: Qt/Media-Foundation devices first, then
+        DirectShow-only virtual cameras (ManyCam / OBS 等).  Returns
+        True when a device was resolved; if camera mode is on the feed
+        is restarted on the new device immediately.
         """
-        dev = self._resolve_camera_device(ident)
-        if dev is None:
+        res = self._resolve_camera_any(ident)
+        if res is None:
             print(f"[camera] no capture device matches {ident!r}")
             return False
-        if self._camera_device is not None \
-           and bytes(dev.id()) == bytes(self._camera_device.id()):
+        backend, dev_ident, desc = res
+        if backend == self._camera_backend and dev_ident == self.current_camera_id():
             return True
-        self._camera_device = dev
+        self._camera_backend = backend
+        if backend == "qt":
+            self._camera_device = self._qt_device_by_id(dev_ident)
+            self._dshow_ident = ""
+            self._dshow_desc = ""
+        else:
+            self._dshow_ident = dev_ident
+            self._dshow_desc = desc
+            self._camera_device = None
         if self._camera_mode:
             self._start_camera()
         return True
 
     @staticmethod
-    def _resolve_camera_device(ident: str) -> Optional[QCameraDevice]:
-        devices = QMediaDevices.videoInputs()
+    def _qt_device_by_id(ident: str) -> Optional[QCameraDevice]:
+        for dev in QMediaDevices.videoInputs():
+            if bytes(dev.id()).decode("utf-8", "replace") == ident:
+                return dev
+        return None
+
+    @classmethod
+    def _resolve_camera_any(cls, ident: str) -> Optional[tuple[str, str, str]]:
+        """Resolve id-or-name to (backend, ident, description)."""
+        devices = cls.available_cameras()
         if not devices:
             return None
         if not ident:
             default = QMediaDevices.defaultVideoInput()
-            return default if not default.isNull() else devices[0]
-        for dev in devices:
-            if bytes(dev.id()).decode("utf-8", "replace") == ident:
-                return dev
+            if default is not None and not default.isNull():
+                return ("qt",
+                        bytes(default.id()).decode("utf-8", "replace"),
+                        default.description())
+            d = devices[0]
+            return (d[2], d[0], d[1])
+        for d_ident, desc, backend in devices:
+            if d_ident == ident:
+                return (backend, d_ident, desc)
         low = ident.lower()
-        for dev in devices:
-            if low in dev.description().lower():
-                return dev
+        for d_ident, desc, backend in devices:
+            if low in desc.lower():
+                return (backend, d_ident, desc)
         return None
 
     def _start_camera(self) -> None:
         self._stop_camera()
+        if self._camera_backend == "dshow":
+            self._start_camera_dshow()
+            return
         dev = self._camera_device
         if dev is None or dev.isNull():
-            dev = self._resolve_camera_device("")
+            res = self._resolve_camera_any("")
+            if res is None:
+                print("[camera] no capture devices available")
+                return
+            backend, dev_ident, desc = res
+            if backend == "dshow":
+                # No MF-visible camera at all, but a DirectShow one
+                # exists (e.g. only ManyCam on this host) — use it.
+                self._camera_backend = "dshow"
+                self._dshow_ident = dev_ident
+                self._dshow_desc = desc
+                self._start_camera_dshow()
+                return
+            dev = self._qt_device_by_id(dev_ident)
             if dev is None:
                 print("[camera] no capture devices available")
                 return
@@ -420,6 +504,20 @@ class DisplayWindow(QWidget):
             print(f"[camera] start failed: {exc!r}")
             self._stop_camera()
 
+    def _start_camera_dshow(self) -> None:
+        if not _DSHOW_AVAILABLE:
+            print("[camera] DirectShow backend unavailable")
+            return
+        try:
+            cam = DShowCamera()
+            if cam.open(self._dshow_ident):
+                self._dshow_cam = cam
+                self._dshow_poll_accum = 0.0
+            else:
+                cam.close()
+        except Exception as exc:
+            print(f"[camera] dshow start failed: {exc!r}")
+
     def _stop_camera(self) -> None:
         if self._camera is not None:
             try:
@@ -434,6 +532,12 @@ class DisplayWindow(QWidget):
         if self._camera_sink is not None:
             self._camera_sink.deleteLater()
             self._camera_sink = None
+        if self._dshow_cam is not None:
+            try:
+                self._dshow_cam.close()
+            except Exception:
+                pass
+            self._dshow_cam = None
         self._latest_camera_image = None
         self._frame_cache_key = None
         self._frame_cache_pm = None
@@ -798,6 +902,24 @@ class DisplayWindow(QWidget):
             self._emit_marquee_status()
             if not self._marquee.tracks:
                 self._dirty = True   # last message left — erase it
+
+        # DirectShow camera backend is pull-based: poll ~30 fps, and only
+        # while the camera is actually visible (same occlusion rule as
+        # the Qt sink's conversion skip).
+        if (self._dshow_cam is not None and self._camera_mode
+                and not self._piano_mode and not self._video_active
+                and self._bg_image is None):
+            self._dshow_poll_accum += dt_ms
+            if self._dshow_poll_accum >= 33.0:
+                self._dshow_poll_accum = 0.0
+                try:
+                    img = self._dshow_cam.grab()
+                except Exception as exc:
+                    print(f"[dshow] grab failed: {exc!r}")
+                    img = None
+                if img is not None:
+                    self._latest_camera_image = img
+                    self._frame_dirty = True
 
         # Idle-return: after a quiet period, fade the title back in.
         if not self._show_idle_title and self._last_activity_ms > 0:
