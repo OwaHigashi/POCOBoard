@@ -1,6 +1,6 @@
 # Agent Handoff
 
-Updated: 2026-08-05 (session closed — see "Next session pickup" at the end)
+Updated: 2026-08-05 (stretch-mode camera fill + piano roll over camera)
 
 ## Summary
 
@@ -1143,4 +1143,56 @@ doc update.  No code in flight, no half-finished refactors.
   operator expectations on the rig.
 - If dshow polling cost ever matters: decimate to 15 fps or move the
   grab to a worker thread.
+
+## Stretch-mode camera fill + translucent piano roll (2026-08-05, later)
+
+User feedback on the rig: pressing 縦型出力補正 made the camera
+picture EVEN NARROWER ("更に細くなりました…逆に設計してください"),
+and piano-roll mode made the camera video disappear entirely
+("ピアノロール画面自体が、半透明にならないとダメです").
+
+### 1. Camera full-bleed in output-stretch mode
+
+Root cause of the "narrower" complaint was NOT an inverted transform:
+the camera frame (16:9-tagged) was being LETTERBOXED into the 9:16
+virtual canvas → a thin horizontal band that the stretch then squashed
+further.  The camera signal comes from the same anamorphic chain as
+our output, so in stretch mode it must be passed through FULL-BLEED:
+`_draw_camera_frame` now fills the whole virtual canvas
+(no letterbox) when `_output_stretch` is on and the portrait crop is
+off.  Net effect: camera = identity through POCOBoard, downstream
+squeeze restores it; FX/marquee still get the pre-distortion.
+With 縦横補正 (swap) also on, the frame is truly 9:16 = same fill,
+aspect-preserving.  Photos/videos keep letterboxing (they carry real
+aspect ratios).
+
+If the rig STILL shows the wrong direction after this, the remaining
+lever is the per-camera 縦横補正 checkbox; a genuinely inverted
+output transform (compose ultra-wide, squeeze) was considered and
+rejected — no realistic chain maps to it.
+
+### 2. Piano roll translucent over the camera
+
+- Piano mode no longer occludes the camera: the ingest skip
+  (`_on_camera_frame`) and the dshow tick-poll now only skip for
+  video/image uploads.
+- paintEvent piano branch: when a camera frame is available, draw
+  camera as the opaque base, then the PianoRollScene at
+  `_piano_roll_opacity` (default 0.65); without a camera the roll
+  paints opaque exactly as before.
+- New `set_piano_roll_opacity`, config `piano_roll_opacity_pct = 65`,
+  spinbox 「カメラ表示中のロールの濃さ」 in the piano panel (row 2;
+  hint moved to row 3).
+
+### Verification
+
+- Offscreen: stretch mode + 4-quadrant camera frame → fills the
+  entire window incl. top edge (no letterbox band); piano roll over
+  camera shows red/green tint through the roll (L=#5f080d R=#05620d
+  at 65%), opacity 100% hides more; Qt-sink ingest continues during
+  piano mode (fake-frame test); no-camera piano path renders opaque.
+- Regressions green: test_stretch, camera overlay, crop policy.
+  Live boot green.
+- Not verified on the rig: the actual capture-board chain with the
+  new fill behavior — next real-hardware check.
 

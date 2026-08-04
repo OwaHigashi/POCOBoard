@@ -167,6 +167,10 @@ class DisplayWindow(QWidget):
         self._piano_image_opacity: float = 0.35
         self._piano_video_opacity: float = 0.35
         self._piano_fx_opacity:    float = 0.55
+        # Opacity of the piano-roll scene itself when a live camera feed
+        # is underneath — the roll must NOT hide the camera (user spec:
+        # ピアノロール画面自体が半透明).  1.0 (opaque) when no camera.
+        self._piano_roll_opacity:  float = 0.65
 
         # --- live camera (USB / virtual camera) mode ---
         # When on, the camera feed acts as the idle background: it fills
@@ -371,6 +375,12 @@ class DisplayWindow(QWidget):
     @Slot(float)
     def set_piano_fx_opacity(self, opacity: float) -> None:
         self._piano_fx_opacity = max(0.0, min(1.0, float(opacity)))
+
+    @Slot(float)
+    def set_piano_roll_opacity(self, opacity: float) -> None:
+        """Opacity of the piano-roll scene over a live camera feed."""
+        self._piano_roll_opacity = max(0.0, min(1.0, float(opacity)))
+        self._dirty = True
 
     @Slot(float)
     def set_piano_image_opacity(self, opacity: float) -> None:
@@ -678,12 +688,13 @@ class DisplayWindow(QWidget):
         # black-flashing.  paintEvent picks the image up on the next tick.
         if frame is None or not frame.isValid():
             return
-        # While the camera is hidden behind an upload or the piano roll,
-        # skip the per-frame QImage conversion entirely — it's pure CPU
-        # burn for pixels nobody sees.  The feed stays open, so the next
-        # frame after the camera becomes visible again (~1/30 s later)
-        # refreshes the picture.
-        if self._piano_mode or self._video_active or self._bg_image is not None:
+        # While the camera is hidden behind an upload, skip the per-frame
+        # QImage conversion entirely — it's pure CPU burn for pixels
+        # nobody sees.  The feed stays open, so the next frame after the
+        # camera becomes visible again (~1/30 s later) refreshes the
+        # picture.  Piano mode does NOT occlude: the roll renders
+        # semi-transparently over the camera, so frames keep flowing.
+        if self._video_active or self._bg_image is not None:
             return
         img = frame.toImage()
         if img is None or img.isNull():
@@ -1035,9 +1046,10 @@ class DisplayWindow(QWidget):
 
         # DirectShow camera backend is pull-based: poll ~30 fps, and only
         # while the camera is actually visible (same occlusion rule as
-        # the Qt sink's conversion skip).
+        # the Qt sink's conversion skip — piano mode keeps polling since
+        # the roll is a translucent overlay above the camera).
         if (self._dshow_cam is not None and self._camera_mode
-                and not self._piano_mode and not self._video_active
+                and not self._video_active
                 and self._bg_image is None):
             self._dshow_poll_accum += dt_ms
             if self._dshow_poll_accum >= 33.0:
@@ -1121,8 +1133,21 @@ class DisplayWindow(QWidget):
                           and not self._latest_camera_image.isNull())
 
         if self._piano_mode and self._piano_scene is not None:
-            # Base layer: keyboard + scrolling note bars.
-            self._piano_scene.draw(p, w, h)
+            # Base layer: live camera (if any) with the keyboard +
+            # scrolling note bars over it SEMI-TRANSPARENTLY, so the
+            # camera picture stays visible through the whole roll.
+            # Without a camera the roll paints opaque as before.
+            has_camera_frame = (self._camera_mode
+                                and self._latest_camera_image is not None
+                                and not self._latest_camera_image.isNull())
+            if has_camera_frame:
+                p.fillRect(0, 0, w, h, Qt.GlobalColor.black)
+                self._draw_camera_frame(p, w, h)
+                p.setOpacity(self._piano_roll_opacity)
+                self._piano_scene.draw(p, w, h)
+                p.setOpacity(1.0)
+            else:
+                self._piano_scene.draw(p, w, h)
             # Visual-slot overlays (image / video) on top, translucent.
             if has_video:
                 p.setOpacity(self._piano_video_opacity)
@@ -1180,6 +1205,15 @@ class DisplayWindow(QWidget):
         if img is None or img.isNull():
             return
         if not self._camera_portrait:
+            if self._output_stretch:
+                # Portrait-output mode: the camera signal comes from the
+                # same anamorphic chain as our output, so pass it through
+                # FULL-BLEED — fill the virtual canvas, no letterbox.
+                # The downstream squeeze restores its true proportions.
+                # (Letterboxing here shrank the picture into a thin band
+                # — the "更に細くなる" bug.)
+                p.drawPixmap(0, 0, self._cached_frame_pixmap(img, None, w, h))
+                return
             self._draw_letterboxed(p, w, h, img)
             return
         iw, ih = img.width(), img.height()

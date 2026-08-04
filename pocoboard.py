@@ -116,6 +116,7 @@ def main() -> int:
     output_stretch   = cfg.get_bool("display_portrait_stretch", False)
     piano_pps     = cfg.get_int("piano_scroll_pps", 110)
     piano_fx_op   = cfg.get_int("piano_fx_opacity_pct", 55)
+    piano_roll_op = cfg.get_int("piano_roll_opacity_pct", 65)
     piano_img_op  = cfg.get_int("piano_image_opacity_pct", 35)
     piano_vid_op  = cfg.get_int("piano_video_opacity_pct", 35)
 
@@ -174,6 +175,7 @@ def main() -> int:
     display.set_marquee_scale(max(50, min(500, marquee_size_pct)) / 100.0)
     display.set_piano_scroll_pps(float(piano_pps))
     display.set_piano_fx_opacity(max(0, min(100, piano_fx_op)) / 100.0)
+    display.set_piano_roll_opacity(max(0, min(100, piano_roll_op)) / 100.0)
     display.set_piano_image_opacity(max(0, min(100, piano_img_op)) / 100.0)
     display.set_piano_video_opacity(max(0, min(100, piano_vid_op)) / 100.0)
     audio.set_media_min_play_sec(min_play_sec)

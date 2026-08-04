@@ -1143,6 +1143,26 @@ class ControlWindow(QWidget):
         self.btnMidiRefresh.clicked.connect(self._refresh_midi_ports)
         gl.addWidget(self.btnMidiRefresh, 1, 2)
 
+        # Row 2: roll opacity over a live camera feed.
+        op_row = QHBoxLayout()
+        op_row.setSpacing(8)
+        op_row.addWidget(QLabel("カメラ表示中のロールの濃さ:"))
+        self.spPianoRollOp = QSpinBox()
+        self.spPianoRollOp.setRange(0, 100)
+        self.spPianoRollOp.setSingleStep(5)
+        self.spPianoRollOp.setSuffix(" %")
+        self.spPianoRollOp.setMinimumHeight(30)
+        self.spPianoRollOp.setValue(
+            int(round(self.display._piano_roll_opacity * 100)))
+        self.spPianoRollOp.setToolTip(
+            "カメラ映像の上に重なるピアノロール自体の不透明度。\n"
+            "0 % = ロールが見えない / 100 % = カメラが隠れる。\n"
+            "カメラ非表示のときは常に不透明で描画されます。")
+        self.spPianoRollOp.valueChanged.connect(self._on_piano_roll_op_changed)
+        op_row.addWidget(self.spPianoRollOp)
+        op_row.addStretch(1)
+        gl.addLayout(op_row, 2, 0, 1, 3)
+
         # Wire MidiEngine's first-note signal so the operator can confirm
         # MIDI events are actually flowing (the most common silent
         # failure mode is "port shows open but no events arrive").
@@ -1171,7 +1191,7 @@ class ControlWindow(QWidget):
         self.lblPianoHint = QLabel(hint_text)
         self.lblPianoHint.setProperty("class", "small")
         self.lblPianoHint.setWordWrap(True)
-        gl.addWidget(self.lblPianoHint, 2, 0, 1, 3)
+        gl.addWidget(self.lblPianoHint, 3, 0, 1, 3)
 
         # Initial population.
         self._refresh_midi_ports(emit_log=False)
@@ -1291,6 +1311,9 @@ class ControlWindow(QWidget):
     def _on_midi_port_changed(self, port: str) -> None:
         """Keep the status pill in sync if anything else opens / closes."""
         self._refresh_piano_status()
+
+    def _on_piano_roll_op_changed(self, v: int) -> None:
+        self.display.set_piano_roll_opacity(v / 100.0)
 
     def _on_piano_toggle_clicked(self, checked: bool) -> None:
         # Forward the new state to the display; pianoModeChanged handler
