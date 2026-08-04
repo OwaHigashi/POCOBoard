@@ -19,7 +19,10 @@ from typing import Optional
 
 from PySide6.QtCore       import QRect, QRectF, QPointF, Qt, QTimer, QUrl, Signal, Slot
 from PySide6.QtGui        import QColor, QFont, QFontMetricsF, QImage, QImageReader, QKeyEvent, QPainter, QPen, QPixmap
-from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer, QVideoSink
+from PySide6.QtMultimedia import (
+    QAudioOutput, QCamera, QCameraDevice, QMediaCaptureSession, QMediaDevices,
+    QMediaPlayer, QVideoSink,
+)
 from PySide6.QtWidgets    import QWidget
 
 from animations import ImageScene, PianoRollScene, Scene, make_scene
@@ -92,6 +95,10 @@ class DisplayWindow(QWidget):
         self._video_sink:   Optional[QVideoSink]   = None
         self._video_player: Optional[QMediaPlayer] = None
         self._video_audio:  Optional[QAudioOutput] = None
+        # Video sound belongs to the "external audio" group (it arrives from
+        # uploaders, like TALK / audio files) — the control window pushes the
+        # external-volume slider value here.
+        self._video_volume: float = 0.8
         self._video_active: bool = False
         self._video_owner:  str  = ""     # uploader client_id
         self._video_url:    Optional[QUrl] = None
@@ -127,6 +134,31 @@ class DisplayWindow(QWidget):
         self._piano_image_opacity: float = 0.35
         self._piano_video_opacity: float = 0.35
         self._piano_fx_opacity:    float = 0.55
+
+        # --- live camera (USB / virtual camera) mode ---
+        # When on, the camera feed acts as the idle background: it fills
+        # the frame whenever no uploaded image / video is showing and
+        # piano mode is off.  FX scenes and the marquee are then drawn
+        # semi-transparently on top (each with its own tunable opacity)
+        # so the camera picture stays visible through them.
+        self._camera_mode: bool = False
+        self._camera:         Optional[QCamera] = None
+        self._camera_session: Optional[QMediaCaptureSession] = None
+        self._camera_sink:    Optional[QVideoSink] = None
+        self._camera_device:  Optional[QCameraDevice] = None
+        self._latest_camera_image: Optional[QImage] = None
+        self._camera_fx_opacity:      float = 0.55
+        self._camera_marquee_opacity: float = 0.75
+        # Portrait (9:16 = 720x1280) crop of the camera frame.  A typical
+        # USB camera delivers landscape frames of a smartphone-style
+        # subject; we cut a 9:16 window out of the source and map it onto
+        # a 720x1280-proportioned rect fitted to the display.  Source and
+        # destination rects share the exact same aspect, so X and Y scale
+        # identically — the picture is never stretched.
+        self._camera_portrait:  bool  = True
+        self._camera_crop_cx:   float = 0.5   # crop-center X, fraction of frame width
+        self._camera_crop_cy:   float = 0.5   # crop-center Y, fraction of frame height
+        self._camera_crop_zoom: float = 1.0   # 1.0 = largest 9:16 crop that fits
 
     # ---------- activity tracking ----------
     def _mark_activity(self) -> None:
@@ -236,6 +268,152 @@ class DisplayWindow(QWidget):
     def set_piano_video_opacity(self, opacity: float) -> None:
         self._piano_video_opacity = max(0.0, min(1.0, float(opacity)))
 
+    # ---------- live camera (USB / virtual camera) mode ----------
+    def is_camera_mode(self) -> bool:
+        return self._camera_mode
+
+    def current_camera_id(self) -> str:
+        if self._camera_device is None or self._camera_device.isNull():
+            return ""
+        return bytes(self._camera_device.id()).decode("utf-8", "replace")
+
+    def current_camera_description(self) -> str:
+        if self._camera_device is None or self._camera_device.isNull():
+            return ""
+        return self._camera_device.description()
+
+    @Slot(float)
+    def set_camera_fx_opacity(self, opacity: float) -> None:
+        self._camera_fx_opacity = max(0.0, min(1.0, float(opacity)))
+
+    @Slot(float)
+    def set_camera_marquee_opacity(self, opacity: float) -> None:
+        self._camera_marquee_opacity = max(0.0, min(1.0, float(opacity)))
+
+    @Slot(bool)
+    def set_camera_portrait(self, on: bool) -> None:
+        """Toggle the 9:16 portrait crop (True) vs full-frame letterbox."""
+        self._camera_portrait = bool(on)
+
+    @Slot(float)
+    def set_camera_crop_cx(self, frac: float) -> None:
+        """Crop-window center X as a fraction (0.0..1.0) of frame width."""
+        self._camera_crop_cx = max(0.0, min(1.0, float(frac)))
+
+    @Slot(float)
+    def set_camera_crop_cy(self, frac: float) -> None:
+        """Crop-window center Y as a fraction (0.0..1.0) of frame height."""
+        self._camera_crop_cy = max(0.0, min(1.0, float(frac)))
+
+    @Slot(float)
+    def set_camera_crop_zoom(self, zoom: float) -> None:
+        """Crop magnification: 1.0 = the largest 9:16 window that fits the
+        source frame; 2.0 = half that window (2x magnified), etc."""
+        self._camera_crop_zoom = max(1.0, min(8.0, float(zoom)))
+
+    @Slot(bool)
+    def set_camera_mode(self, on: bool) -> None:
+        on = bool(on)
+        if on == self._camera_mode:
+            return
+        self._camera_mode = on
+        if on:
+            self._start_camera()
+        else:
+            self._stop_camera()
+        self.update()
+
+    @Slot(str)
+    def set_camera_device(self, ident: str) -> bool:
+        """Select a capture device by id (exact) or description (substring).
+
+        Empty string picks the system default camera.  Virtual cameras
+        (OBS 等) show up in QMediaDevices.videoInputs() like any USB cam.
+        Returns True when a device was resolved; if camera mode is on the
+        feed is restarted on the new device immediately.
+        """
+        dev = self._resolve_camera_device(ident)
+        if dev is None:
+            print(f"[camera] no capture device matches {ident!r}")
+            return False
+        if self._camera_device is not None \
+           and bytes(dev.id()) == bytes(self._camera_device.id()):
+            return True
+        self._camera_device = dev
+        if self._camera_mode:
+            self._start_camera()
+        return True
+
+    @staticmethod
+    def _resolve_camera_device(ident: str) -> Optional[QCameraDevice]:
+        devices = QMediaDevices.videoInputs()
+        if not devices:
+            return None
+        if not ident:
+            default = QMediaDevices.defaultVideoInput()
+            return default if not default.isNull() else devices[0]
+        for dev in devices:
+            if bytes(dev.id()).decode("utf-8", "replace") == ident:
+                return dev
+        low = ident.lower()
+        for dev in devices:
+            if low in dev.description().lower():
+                return dev
+        return None
+
+    def _start_camera(self) -> None:
+        self._stop_camera()
+        dev = self._camera_device
+        if dev is None or dev.isNull():
+            dev = self._resolve_camera_device("")
+            if dev is None:
+                print("[camera] no capture devices available")
+                return
+            self._camera_device = dev
+        try:
+            self._camera_sink = QVideoSink(self)
+            self._camera_sink.videoFrameChanged.connect(self._on_camera_frame)
+            self._camera_session = QMediaCaptureSession(self)
+            self._camera = QCamera(dev, self)
+            self._camera.errorOccurred.connect(self._on_camera_error)
+            self._camera_session.setCamera(self._camera)
+            self._camera_session.setVideoSink(self._camera_sink)
+            self._camera.start()
+            print(f"[camera] started: {dev.description()}")
+        except Exception as exc:
+            print(f"[camera] start failed: {exc!r}")
+            self._stop_camera()
+
+    def _stop_camera(self) -> None:
+        if self._camera is not None:
+            try:
+                self._camera.stop()
+            except Exception:
+                pass
+            self._camera.deleteLater()
+            self._camera = None
+        if self._camera_session is not None:
+            self._camera_session.deleteLater()
+            self._camera_session = None
+        if self._camera_sink is not None:
+            self._camera_sink.deleteLater()
+            self._camera_sink = None
+        self._latest_camera_image = None
+
+    def _on_camera_frame(self, frame) -> None:
+        # Same cheap path as the video sink: drop invalid frames so a
+        # brief capture hiccup keeps the previous picture instead of
+        # black-flashing.  paintEvent picks the image up on the next tick.
+        if frame is None or not frame.isValid():
+            return
+        img = frame.toImage()
+        if img is None or img.isNull():
+            return
+        self._latest_camera_image = img
+
+    def _on_camera_error(self, err, msg) -> None:
+        print(f"[camera] error {err}: {msg}")
+
     # ---------- piano roll (MIDI) mode ----------
     def is_piano_mode(self) -> bool:
         return self._piano_mode
@@ -299,6 +477,13 @@ class DisplayWindow(QWidget):
         """
         self._media_min_play_sec = max(0, int(sec))
 
+    @Slot(float)
+    def set_video_volume(self, vol: float) -> None:
+        """Set video-audio gain (0.0..1.0) — driven by the 外部音声 slider."""
+        self._video_volume = max(0.0, min(1.0, float(vol)))
+        if self._video_audio is not None:
+            self._video_audio.setVolume(self._video_volume)
+
     def _clear_image_internal(self) -> bool:
         had_image = self._bg_image is not None
         self._image_timer.stop()
@@ -323,7 +508,7 @@ class DisplayWindow(QWidget):
         self._video_sink = QVideoSink(self)
         self._video_sink.videoFrameChanged.connect(self._on_video_frame)
         self._video_audio = QAudioOutput(self)
-        self._video_audio.setVolume(0.8)
+        self._video_audio.setVolume(self._video_volume)
         self._video_player = QMediaPlayer(self)
         self._video_player.setVideoSink(self._video_sink)
         self._video_player.setAudioOutput(self._video_audio)
@@ -591,13 +776,20 @@ class DisplayWindow(QWidget):
         #   piano-mode OFF (legacy behavior):
         #     1. Video frame as full-screen background, OR
         #        Image background, OR
+        #        Live camera feed (camera mode — the default idle base), OR
         #        Idle "POCOBOARD" title, OR
         #        Black fill
-        #     2. FX scene (opaque normally; @0.75 over video so the video
-        #        stays visible through the spark storm)
-        #     3. Marquee
+        #     2. FX scene (opaque normally; @0.75 over video / tunable
+        #        @camera_fx_opacity over the camera feed)
+        #     3. Marquee (tunable @camera_marquee_opacity over the camera)
         has_video = self._video_active and self._latest_video_image is not None
         has_image = self._bg_image is not None and not self._bg_image.isNull()
+        # The camera acts as the bottom of the visual stack: uploaded
+        # image / video and the piano roll all take precedence over it.
+        camera_visible = (not self._piano_mode and not has_video
+                          and not has_image and self._camera_mode
+                          and self._latest_camera_image is not None
+                          and not self._latest_camera_image.isNull())
 
         if self._piano_mode and self._piano_scene is not None:
             # Base layer: keyboard + scrolling note bars.
@@ -618,6 +810,9 @@ class DisplayWindow(QWidget):
         elif has_image:
             p.fillRect(0, 0, w, h, Qt.GlobalColor.black)
             self._draw_bg_image(p, w, h)
+        elif camera_visible:
+            p.fillRect(0, 0, w, h, Qt.GlobalColor.black)
+            self._draw_camera_frame(p, w, h)
         elif self._show_idle_title and self._scene is None:
             p.fillRect(0, 0, w, h, QColor(8, 10, 16))
             self._draw_idle(p, w, h, alpha=self._title_fade)
@@ -629,6 +824,10 @@ class DisplayWindow(QWidget):
                 p.setOpacity(self._piano_fx_opacity)
                 self._scene.draw(p, w, h)
                 p.setOpacity(1.0)
+            elif camera_visible:
+                p.setOpacity(self._camera_fx_opacity)
+                self._scene.draw(p, w, h)
+                p.setOpacity(1.0)
             elif has_video:
                 p.setOpacity(0.75)
                 self._scene.draw(p, w, h)
@@ -637,10 +836,46 @@ class DisplayWindow(QWidget):
                 self._scene.draw(p, w, h)
 
         if self._marquee.tracks:
-            self._marquee.draw(p, QRectF(0, 0, w, h))
+            if camera_visible:
+                p.setOpacity(self._camera_marquee_opacity)
+                self._marquee.draw(p, QRectF(0, 0, w, h))
+                p.setOpacity(1.0)
+            else:
+                self._marquee.draw(p, QRectF(0, 0, w, h))
 
     def _draw_video_frame(self, p: QPainter, w: int, h: int) -> None:
-        img = self._latest_video_image
+        self._draw_letterboxed(p, w, h, self._latest_video_image)
+
+    def _draw_camera_frame(self, p: QPainter, w: int, h: int) -> None:
+        img = self._latest_camera_image
+        if img is None or img.isNull():
+            return
+        if not self._camera_portrait:
+            self._draw_letterboxed(p, w, h, img)
+            return
+        iw, ih = img.width(), img.height()
+        if iw <= 0 or ih <= 0:
+            return
+        # Source: the largest 9:16 window that fits inside the frame,
+        # shrunk by the zoom factor, centered on the aim point (clamped so
+        # the window never leaves the frame).
+        crop_h = min(float(ih), iw * 16.0 / 9.0) / self._camera_crop_zoom
+        crop_w = crop_h * 9.0 / 16.0
+        sx = min(max(self._camera_crop_cx * iw - crop_w / 2.0, 0.0), iw - crop_w)
+        sy = min(max(self._camera_crop_cy * ih - crop_h / 2.0, 0.0), ih - crop_h)
+        src = QRectF(sx, sy, crop_w, crop_h)
+        # Destination: a 720x1280-proportioned portrait rect fitted to the
+        # window and centered.  Same 9:16 aspect as the source rect, so
+        # drawImage scales X and Y by the identical factor (no stretch).
+        scale = min(w / 720.0, h / 1280.0)
+        dw = 720.0 * scale
+        dh = 1280.0 * scale
+        dst = QRectF((w - dw) / 2.0, (h - dh) / 2.0, dw, dh)
+        p.drawImage(dst, img, src)
+
+    @staticmethod
+    def _draw_letterboxed(p: QPainter, w: int, h: int,
+                          img: Optional[QImage]) -> None:
         if img is None or img.isNull():
             return
         iw, ih = img.width(), img.height()

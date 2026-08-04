@@ -74,6 +74,11 @@ def main() -> int:
     host = cfg.get_str("http_host", "0.0.0.0")
     port = args.port if args.port is not None else cfg.get_int("http_port", 8080)
     startup_volume = cfg.get_int("startup_volume", 80)
+    # Per-group volumes: FX one-shots vs external audio (TALK / uploaded
+    # audio / video sound).  Both fall back to startup_volume so an old
+    # config.ini keeps its previous behavior.
+    startup_fx_volume  = cfg.get_int("startup_fx_volume", startup_volume)
+    startup_ext_volume = cfg.get_int("startup_ext_volume", startup_volume)
     accept_on_boot = cfg.get_bool("accept_on_boot", True)
     debounce_ms    = cfg.get_int("debounce_ms", 300)
 
@@ -91,6 +96,18 @@ def main() -> int:
     #                     have played, then stop at the next natural end (0 = play once).
     image_sec    = cfg.get_int("image_display_sec", 180)
     min_play_sec = cfg.get_int("media_min_play_sec", 60)
+    # Live camera (USB / virtual camera) — ON by default: the camera feed
+    # is the standard idle background, with FX / marquee overlaid
+    # semi-transparently while it is visible.
+    camera_on_boot = cfg.get_bool("camera_on_boot", True)
+    camera_device  = cfg.get_str("camera_device", "")
+    camera_fx_op   = cfg.get_int("camera_fx_opacity_pct", 55)
+    camera_mq_op   = cfg.get_int("camera_marquee_opacity_pct", 75)
+    # Portrait 9:16 (720x1280) crop of the camera frame — aim point + zoom.
+    camera_portrait  = cfg.get_bool("camera_portrait_crop", True)
+    camera_crop_cx   = cfg.get_int("camera_crop_cx_pct", 50)
+    camera_crop_cy   = cfg.get_int("camera_crop_cy_pct", 50)
+    camera_crop_zoom = cfg.get_int("camera_crop_zoom_pct", 100)
     piano_pps     = cfg.get_int("piano_scroll_pps", 110)
     piano_fx_op   = cfg.get_int("piano_fx_opacity_pct", 55)
     piano_img_op  = cfg.get_int("piano_image_opacity_pct", 35)
@@ -125,11 +142,12 @@ def main() -> int:
     # ----- bridge + audio -----
     bridge = WebBridge()
     bridge.set_debounce_ms(debounce_ms)
-    bridge.set_volume(startup_volume)
+    bridge.set_volume(startup_ext_volume)
     bridge.set_accept(accept_on_boot)
 
     audio = AudioEngine()
-    audio.set_volume(startup_volume)
+    audio.set_fx_volume(startup_fx_volume)
+    audio.set_ext_volume(startup_ext_volume)
     audio.preload()
 
     # Media queue — uploads land here and wait for the operator to press
@@ -153,6 +171,16 @@ def main() -> int:
     display.set_piano_image_opacity(max(0, min(100, piano_img_op)) / 100.0)
     display.set_piano_video_opacity(max(0, min(100, piano_vid_op)) / 100.0)
     audio.set_media_min_play_sec(min_play_sec)
+    display.set_video_volume(max(0, min(100, startup_ext_volume)) / 100.0)
+    display.set_camera_fx_opacity(max(0, min(100, camera_fx_op)) / 100.0)
+    display.set_camera_marquee_opacity(max(0, min(100, camera_mq_op)) / 100.0)
+    display.set_camera_portrait(camera_portrait)
+    display.set_camera_crop_cx(max(0, min(100, camera_crop_cx)) / 100.0)
+    display.set_camera_crop_cy(max(0, min(100, camera_crop_cy)) / 100.0)
+    display.set_camera_crop_zoom(max(100, min(800, camera_crop_zoom)) / 100.0)
+    if camera_device:
+        display.set_camera_device(camera_device)
+    display.set_camera_mode(camera_on_boot)
 
     # USB MIDI input (optional — degrades gracefully when mido is missing).
     midi = MidiEngine()
@@ -185,7 +213,7 @@ def main() -> int:
     # ----- control window -----
     ctrl = ControlWindow(bridge, audio, display, media_queue, midi=midi)
     ctrl.set_http_address(host, port)
-    ctrl.set_initial_volume(startup_volume)
+    ctrl.set_initial_volumes(startup_fx_volume, startup_ext_volume)
     ctrl.set_initial_accept(accept_on_boot)
     ctrl.set_selected_screen(disp_screen)
     if fs_default:
@@ -258,6 +286,10 @@ def main() -> int:
     ctrl.refresh_users()
 
     rc = app.exec()
+    try:
+        display.set_camera_mode(False)
+    except Exception:
+        pass
     try:
         midi.close_port()
     except Exception:

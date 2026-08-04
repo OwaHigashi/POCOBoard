@@ -1,6 +1,6 @@
 # Agent Handoff
 
-Updated: 2026-05-10 (marquee size scale 50%–500%)
+Updated: 2026-08-04 (camera default mode + split FX / external volume)
 
 ## Summary
 
@@ -673,4 +673,147 @@ User report: ニコニコ風スクロール文字が小さすぎて配信視聴�
   start POCOBoard, flow a message, confirm it renders ~1.5x the
   pre-change size by default, then drag the spinbox to 250 % and
   500 % to confirm scale + auto-clear behavior.
+
+## Split FX / external volume (2026-08-04)
+
+User report: リスナー由来の音 (TALK・アップロード音声・動画) が小さい
+のでボリュームを上げると、アイテム効果音 (BOMB/CHEER 等) が大き
+すぎてびっくりする。単一の音量スライダでは両者のバランスが取れない
+ので、別々に調整できるようにした。
+
+### Volume grouping
+
+Two independent gains replace the single master:
+
+- **効果音 (FX)** — synthesized one-shots (bomb/cheer/hearts/...).
+- **外部音声 (external)** — TALK mixer sink + uploaded audio files
+  (`QMediaPlayer`/`QAudioOutput` file player) + **video sound**
+  (`DisplayWindow._video_audio`, which was previously hard-coded at
+  0.8 and not connected to any slider at all).
+
+### Code changes
+
+- `audio.py`
+  - `_volume` → `_fx_volume` + `_ext_volume` (both default 0.8).
+  - New `set_fx_volume(int)` (fx sink) and `set_ext_volume(int)`
+    (talk sink + file output).  `set_volume(int)` kept as a legacy
+    master that sets both — nothing in-tree calls it anymore but it
+    keeps external callers / old scripts working.
+  - `play_fx`, `_build_talk_sink`, `_ensure_file_player` each apply
+    their group's gain.
+- `display_window.py`
+  - New `_video_volume` (default 0.8) + `Slot(float)
+    set_video_volume(vol)`; applied in `_ensure_video_player` and
+    live to an existing `_video_audio`.
+- `control_window.py`
+  - 音量 group box now holds two labeled sliders (QGridLayout):
+    `効果音` → `audio.set_fx_volume`; `外部音声` →
+    `audio.set_ext_volume` + `display.set_video_volume` +
+    `bridge.set_volume` (the browser /status `volume` pill now
+    reflects the *external* gain — that's the one governing how loud
+    a listener's own content plays).
+  - `set_initial_volume(v)` → `set_initial_volumes(fx, ext)`.
+- `pocoboard.py`
+  - New config keys `startup_fx_volume` / `startup_ext_volume`,
+    both defaulting to the existing `startup_volume` (old config.ini
+    keeps its previous behavior).  Wires bridge + audio + display
+    video volume + control sliders from them.
+- `config.example.ini` / `README.md` — documented the two keys and
+  the two-slider 音量 UI.
+
+### Verification
+
+- `python -m py_compile audio.py display_window.py
+  control_window.py pocoboard.py` — clean.
+- Live smoke test (scratchpad, real `AudioEngine` under
+  `QCoreApplication` on this host): talk sink volume follows
+  `set_ext_volume` (0.90), lazily-created file output picks up the
+  ext gain (0.70), legacy `set_volume` still drives both groups,
+  0..100 clamping holds.
+- Not verified live: actual audible balance on the deploy rig (needs
+  real TALK input + FX side by side), and the control-window layout
+  render (no GUI session here).  Next boot: check the 音量 box shows
+  two sliders and that dragging 外部音声 changes video sound too.
+
+## Live camera default mode (2026-08-04)
+
+User request: USB カメラや仮想カメラ (OBS 等) の映像を画面に表示する
+機能。これが表示されているモードがデフォルト。カメラ表示中は効果
+(FX) や飛ぶ文字 (マーキー) を半透明で重ね、その不透明度も調整可能に。
+追加要件: カメラ映像から狙った場所を 9:16 (720x1280) で crop して
+縦型表示。縦横比は絶対に変えない（X/Y 同率スケール）。
+
+### Architecture
+
+`QCamera + QMediaCaptureSession + QVideoSink` (Qt6) — frames land as
+QImage in `_latest_camera_image`, drawn in paintEvent like the video
+path.  Virtual cameras (OBS Virtual Camera 等) appear in
+`QMediaDevices.videoInputs()` on Windows like any USB cam.
+
+Visual stack priority (back → front base layer):
+piano roll > uploaded video > uploaded image > **camera feed** > idle
+title > black.  I.e. the camera is the *idle background*: uploads still
+take the screen as before, and when they end/clear the display falls
+back to the camera instead of the POCOBOARD title.  `camera_visible`
+in paintEvent = camera mode on AND frame present AND no image/video AND
+not piano mode.
+
+While `camera_visible`:
+- FX scenes draw at `_camera_fx_opacity` (default 0.55)
+- Marquee draws at `_camera_marquee_opacity` (default 0.75)
+Both live-tunable 0..100 % from the control window; over video the
+legacy fixed 0.75 FX opacity is unchanged, and piano mode keeps its own
+opacities.
+
+### Portrait 9:16 crop (720x1280)
+
+`_draw_camera_frame`: source rect = largest 9:16 window fitting the
+frame (`crop_h = min(ih, iw*16/9) / zoom`, `crop_w = crop_h*9/16`),
+centered on aim point (`_camera_crop_cx/cy`, fraction 0..1, clamped so
+the window stays inside the frame).  Dest rect = 720x1280-proportioned
+rect fitted+centered in the window (`scale = min(w/720, h/1280)`).
+Source and dest share the exact 9:16 aspect → `drawImage` scales X and
+Y identically, aspect never distorts.  `set_camera_portrait(False)`
+falls back to full-frame letterbox (shares `_draw_letterboxed` helper
+with the video path now).
+
+### Files
+
+- `display_window.py` — camera state + `set_camera_mode/device/
+  fx_opacity/marquee_opacity/portrait/crop_cx/crop_cy/crop_zoom`,
+  `_start_camera/_stop_camera/_on_camera_frame/_on_camera_error`,
+  `_resolve_camera_device` (id exact → description substring → default),
+  paintEvent layering above.  Camera keeps running while hidden behind
+  uploads (instant return, no re-open lag).
+- `control_window.py` — new 📷 カメラ表示 box in 表示 tab (above the
+  piano box): ON/OFF toggle, device combo + カメラ更新 (auto-selects
+  via currentIndexChanged — same "programmatic select must actually
+  open" lesson as the MIDI combo), 効果の濃さ / 文字の濃さ spinboxes,
+  縦型 9:16 クロップ checkbox + 位置X / 位置Y / ズーム spinboxes.
+  Reads initial state from display (pocoboard configures display before
+  ControlWindow is constructed).
+- `pocoboard.py` — config keys `camera_on_boot` (default **true** =
+  camera is the shipped default mode), `camera_device` (empty=default,
+  else id/description match), `camera_fx_opacity_pct` (55),
+  `camera_marquee_opacity_pct` (75), `camera_portrait_crop` (true),
+  `camera_crop_cx_pct`/`cy_pct` (50), `camera_crop_zoom_pct` (100,
+  clamped 100..800).  Camera stopped on shutdown before MIDI close.
+- `config.example.ini` / `README.md` — documented.
+
+### Verification
+
+- `py_compile` clean.
+- Offscreen render test (scratchpad `test_camera_overlay.py`): real
+  DisplayWindow + synthetic 4-quadrant camera frame injected directly.
+  Verified: center crop shows red|green split with black pillarbox,
+  aim (0.75,0.75)+2x zoom shows solid yellow, CHEER over camera keeps
+  picture visible (#8e7e26 blend), setter clamping, full-frame
+  letterbox fallback.
+- Live boot on this host (offscreen, port 8099): prints
+  `[camera] started: Live Streamer CAM 313` (real USB cam auto-started
+  by default) and the control window builds cleanly.
+- Not verified: on-screen look with a real camera (this session was
+  offscreen), device hot-unplug while running (QCamera errorOccurred
+  just logs; feed freezes on last frame until操作), OBS virtual camera
+  enumeration on the deploy host.
 

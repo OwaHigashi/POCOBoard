@@ -304,7 +304,12 @@ class AudioEngine(QObject):
 
     def __init__(self) -> None:
         super().__init__()
-        self._volume = 0.8
+        # Two independent gains: FX one-shots (bomb/cheer/...) vs external
+        # audio (TALK voice + uploaded audio files).  Listeners' incoming
+        # audio tends to be much quieter than the synthesized FX, so the
+        # operator needs to balance them separately.
+        self._fx_volume  = 0.8
+        self._ext_volume = 0.8
         self._fx_cache: dict[str, bytes] = {}
         self._fx_buffer: Optional[QBuffer] = None
         self._fx_sink: Optional[QAudioSink] = None
@@ -359,13 +364,21 @@ class AudioEngine(QObject):
 
     # ---------- volume ----------
     def set_volume(self, v: int) -> None:
-        self._volume = max(0, min(100, int(v))) / 100.0
+        """Legacy master volume — sets both FX and external gains at once."""
+        self.set_fx_volume(v)
+        self.set_ext_volume(v)
+
+    def set_fx_volume(self, v: int) -> None:
+        self._fx_volume = max(0, min(100, int(v))) / 100.0
         if self._fx_sink:
-            self._fx_sink.setVolume(self._volume)
+            self._fx_sink.setVolume(self._fx_volume)
+
+    def set_ext_volume(self, v: int) -> None:
+        self._ext_volume = max(0, min(100, int(v))) / 100.0
         if self._talk_sink:
-            self._talk_sink.setVolume(self._volume)
+            self._talk_sink.setVolume(self._ext_volume)
         if self._file_output:
-            self._file_output.setVolume(self._volume)
+            self._file_output.setVolume(self._ext_volume)
 
     # ---------- audio-file playback (uploaded MP3 etc.) ----------
     # Uploaded audio plays once, then loops to the min-play duration if
@@ -374,7 +387,7 @@ class AudioEngine(QObject):
         if self._file_player is not None:
             return
         self._file_output = QAudioOutput(self)
-        self._file_output.setVolume(self._volume)
+        self._file_output.setVolume(self._ext_volume)
         self._file_player = QMediaPlayer(self)
         self._file_player.setAudioOutput(self._file_output)
         self._file_player.setLoops(1)
@@ -471,7 +484,7 @@ class AudioEngine(QObject):
         if self._fx_sink is not None:
             self._fx_sink.stop()
         self._fx_sink = _make_sink(FX_SR)
-        self._fx_sink.setVolume(self._volume)
+        self._fx_sink.setVolume(self._fx_volume)
         self._fx_buffer = QBuffer()
         self._fx_buffer.setData(QByteArray(data))
         self._fx_buffer.open(QIODevice.OpenModeFlag.ReadOnly)
@@ -502,7 +515,7 @@ class AudioEngine(QObject):
             self._talk_io = None
         try:
             self._talk_sink = _make_sink(TALK_SR)
-            self._talk_sink.setVolume(self._volume)
+            self._talk_sink.setVolume(self._ext_volume)
             # Watch for the sink falling into an error/stopped state so the
             # pump can trigger a rebuild *before* the next write silently
             # succeeds into a dead sink.

@@ -12,10 +12,11 @@ import socket
 
 from PySide6.QtCore    import Qt, QTimer, Signal, Slot
 from PySide6.QtGui     import QFont, QGuiApplication
+from PySide6.QtMultimedia import QMediaDevices
 from PySide6.QtWidgets import (
-    QApplication, QAbstractScrollArea, QComboBox, QFileDialog, QFrame, QGridLayout,
-    QGroupBox, QHBoxLayout, QLabel, QPushButton, QScrollArea, QSlider,
-    QSpinBox, QTabWidget, QTextEdit, QVBoxLayout, QWidget,
+    QApplication, QAbstractScrollArea, QCheckBox, QComboBox, QFileDialog,
+    QFrame, QGridLayout, QGroupBox, QHBoxLayout, QLabel, QPushButton,
+    QScrollArea, QSlider, QSpinBox, QTabWidget, QTextEdit, QVBoxLayout, QWidget,
 )
 
 from audio        import AudioEngine
@@ -597,17 +598,40 @@ class ControlWindow(QWidget):
         return fx_box
 
     def _build_volume(self) -> QWidget:
+        # Two independent gains: FX one-shots are synthesized loud, while
+        # listeners' TALK / uploaded audio / video sound is usually much
+        # quieter — a single master slider couldn't balance them.
         vol_box = QGroupBox("音量")
-        vl = QHBoxLayout(vol_box)
-        vl.setContentsMargins(10, 8, 10, 8)
-        self.volSlider = QSlider(Qt.Orientation.Horizontal)
-        self.volSlider.setRange(0, 100)
-        self.volSlider.setValue(80)
-        self.volSlider.valueChanged.connect(self._on_volume_changed)
-        self.lblVol = QLabel("80 / 100")
-        self.lblVol.setMinimumWidth(80)
-        vl.addWidget(self.volSlider, 1)
-        vl.addWidget(self.lblVol)
+        gl = QGridLayout(vol_box)
+        gl.setContentsMargins(10, 8, 10, 8)
+        gl.setHorizontalSpacing(8)
+        gl.setVerticalSpacing(4)
+
+        lblFx = QLabel("効果音")
+        lblFx.setToolTip("BOMB / CHEER などのアイテム効果音の音量")
+        self.volFxSlider = QSlider(Qt.Orientation.Horizontal)
+        self.volFxSlider.setRange(0, 100)
+        self.volFxSlider.setValue(80)
+        self.volFxSlider.valueChanged.connect(self._on_fx_volume_changed)
+        self.lblVolFx = QLabel("80 / 100")
+        self.lblVolFx.setMinimumWidth(80)
+        gl.addWidget(lblFx,            0, 0)
+        gl.addWidget(self.volFxSlider, 0, 1)
+        gl.addWidget(self.lblVolFx,    0, 2)
+
+        lblExt = QLabel("外部音声")
+        lblExt.setToolTip("リスナーからの TALK・アップロード音声・動画の音量")
+        self.volExtSlider = QSlider(Qt.Orientation.Horizontal)
+        self.volExtSlider.setRange(0, 100)
+        self.volExtSlider.setValue(80)
+        self.volExtSlider.valueChanged.connect(self._on_ext_volume_changed)
+        self.lblVolExt = QLabel("80 / 100")
+        self.lblVolExt.setMinimumWidth(80)
+        gl.addWidget(lblExt,            1, 0)
+        gl.addWidget(self.volExtSlider, 1, 1)
+        gl.addWidget(self.lblVolExt,    1, 2)
+
+        gl.setColumnStretch(1, 1)
         return vol_box
 
     # ---- tab: media queue ----
@@ -823,12 +847,215 @@ class ControlWindow(QWidget):
         hint.setWordWrap(True)
         dl.addWidget(hint, 4, 0, 1, 3)
 
+        # ---- Live camera (USB / virtual camera) ----
+        camera_box = self._build_camera_box()
+        dl.addWidget(camera_box, 5, 0, 1, 3)
+
         # ---- Piano roll (USB MIDI) ----
         piano_box = self._build_piano_box()
-        dl.addWidget(piano_box, 5, 0, 1, 3)
+        dl.addWidget(piano_box, 6, 0, 1, 3)
 
-        dl.setRowStretch(6, 1)
+        dl.setRowStretch(7, 1)
         return w
+
+    # ---- live camera (USB / virtual camera) controls ----
+    def _build_camera_box(self) -> QWidget:
+        box = QGroupBox("📷 カメラ表示 (USB / 仮想カメラ)")
+        gl = QGridLayout(box)
+        gl.setContentsMargins(10, 10, 10, 10)
+        gl.setHorizontalSpacing(10)
+        gl.setVerticalSpacing(8)
+
+        # Row 0: ON/OFF toggle (reflects whatever pocoboard.py already set
+        # from config — camera mode is the shipped default) + device combo
+        # + refresh.
+        cam_on = self.display.is_camera_mode()
+        self.btnCameraMode = QPushButton(
+            "カメラ表示 ON" if cam_on else "カメラ表示 OFF")
+        self.btnCameraMode.setCheckable(True)
+        self.btnCameraMode.setChecked(cam_on)
+        self.btnCameraMode.setMinimumHeight(40)
+        self.btnCameraMode.setProperty("class",
+                                       "toggleOn" if cam_on else "toggleOff")
+        self.btnCameraMode.clicked.connect(self._on_camera_toggle_clicked)
+        gl.addWidget(self.btnCameraMode, 0, 0)
+
+        self.cbCameraDev = QComboBox()
+        self.cbCameraDev.setMinimumHeight(30)
+        # currentIndexChanged (not activated) for the same reason as the
+        # MIDI combo: programmatic auto-select must also open the device.
+        self.cbCameraDev.currentIndexChanged.connect(self._on_camera_device_picked)
+        gl.addWidget(self.cbCameraDev, 0, 1)
+        self.btnCameraRefresh = QPushButton("カメラ更新")
+        self.btnCameraRefresh.setMinimumHeight(30)
+        self.btnCameraRefresh.clicked.connect(self._refresh_camera_devices)
+        gl.addWidget(self.btnCameraRefresh, 0, 2)
+
+        # Row 1: overlay opacities.  FX scenes and marquee text render
+        # semi-transparently while the camera feed is visible so the
+        # picture stays readable through them.
+        op_row = QHBoxLayout()
+        op_row.setSpacing(8)
+        op_row.addWidget(QLabel("効果の濃さ:"))
+        self.spCamFxOp = QSpinBox()
+        self.spCamFxOp.setRange(0, 100)
+        self.spCamFxOp.setSingleStep(5)
+        self.spCamFxOp.setSuffix(" %")
+        self.spCamFxOp.setMinimumHeight(30)
+        self.spCamFxOp.setValue(int(round(self.display._camera_fx_opacity * 100)))
+        self.spCamFxOp.setToolTip(
+            "カメラ表示中の BOMB / CHEER などエフェクトの不透明度\n"
+            "0 % = 見えない / 100 % = 完全に上書き")
+        self.spCamFxOp.valueChanged.connect(self._on_cam_fx_opacity_changed)
+        op_row.addWidget(self.spCamFxOp)
+        op_row.addSpacing(12)
+        op_row.addWidget(QLabel("文字の濃さ:"))
+        self.spCamMqOp = QSpinBox()
+        self.spCamMqOp.setRange(0, 100)
+        self.spCamMqOp.setSingleStep(5)
+        self.spCamMqOp.setSuffix(" %")
+        self.spCamMqOp.setMinimumHeight(30)
+        self.spCamMqOp.setValue(
+            int(round(self.display._camera_marquee_opacity * 100)))
+        self.spCamMqOp.setToolTip(
+            "カメラ表示中の横スクロール文字（飛ぶ文字）の不透明度")
+        self.spCamMqOp.valueChanged.connect(self._on_cam_marquee_opacity_changed)
+        op_row.addWidget(self.spCamMqOp)
+        op_row.addStretch(1)
+        gl.addLayout(op_row, 1, 0, 1, 3)
+
+        # Row 2: portrait 9:16 crop controls.  The camera frame is cropped
+        # to a 9:16 (720x1280) window and scaled uniformly — position /
+        # zoom pick WHICH part of the frame lands on screen.
+        crop_row = QHBoxLayout()
+        crop_row.setSpacing(8)
+        self.chkCamPortrait = QCheckBox("縦型 9:16 クロップ")
+        self.chkCamPortrait.setChecked(self.display._camera_portrait)
+        self.chkCamPortrait.setToolTip(
+            "ON: カメラ映像から 9:16 (720x1280) の範囲を切り出して縦型表示\n"
+            "OFF: カメラ映像全体をレターボックス表示")
+        self.chkCamPortrait.toggled.connect(self._on_cam_portrait_toggled)
+        crop_row.addWidget(self.chkCamPortrait)
+        crop_row.addSpacing(8)
+        crop_row.addWidget(QLabel("位置X:"))
+        self.spCamCropX = QSpinBox()
+        self.spCamCropX.setRange(0, 100)
+        self.spCamCropX.setSingleStep(5)
+        self.spCamCropX.setSuffix(" %")
+        self.spCamCropX.setMinimumHeight(30)
+        self.spCamCropX.setValue(int(round(self.display._camera_crop_cx * 100)))
+        self.spCamCropX.setToolTip("切り出し窓の中心の横位置（0=左端 / 50=中央 / 100=右端）")
+        self.spCamCropX.valueChanged.connect(self._on_cam_crop_changed)
+        crop_row.addWidget(self.spCamCropX)
+        crop_row.addWidget(QLabel("位置Y:"))
+        self.spCamCropY = QSpinBox()
+        self.spCamCropY.setRange(0, 100)
+        self.spCamCropY.setSingleStep(5)
+        self.spCamCropY.setSuffix(" %")
+        self.spCamCropY.setMinimumHeight(30)
+        self.spCamCropY.setValue(int(round(self.display._camera_crop_cy * 100)))
+        self.spCamCropY.setToolTip("切り出し窓の中心の縦位置（0=上端 / 50=中央 / 100=下端）")
+        self.spCamCropY.valueChanged.connect(self._on_cam_crop_changed)
+        crop_row.addWidget(self.spCamCropY)
+        crop_row.addWidget(QLabel("ズーム:"))
+        self.spCamCropZoom = QSpinBox()
+        self.spCamCropZoom.setRange(100, 800)
+        self.spCamCropZoom.setSingleStep(10)
+        self.spCamCropZoom.setSuffix(" %")
+        self.spCamCropZoom.setMinimumHeight(30)
+        self.spCamCropZoom.setValue(
+            int(round(self.display._camera_crop_zoom * 100)))
+        self.spCamCropZoom.setToolTip(
+            "100 % = 映像に収まる最大の 9:16 範囲 / 数値を上げるほど狙った場所に寄る")
+        self.spCamCropZoom.valueChanged.connect(self._on_cam_crop_changed)
+        crop_row.addWidget(self.spCamCropZoom)
+        crop_row.addStretch(1)
+        gl.addLayout(crop_row, 2, 0, 1, 3)
+
+        # Row 3: hint
+        hint = QLabel(
+            "USB カメラや OBS などの仮想カメラの映像を待受画面として表示します。"
+            " 映像は 9:16 (720x1280) で切り出され、縦横同率で拡大されます"
+            "（比率は変わりません）。位置X/Y とズームで狙った場所を合わせてください。"
+            " 写真・動画がアップロードされた間はそちらが優先され、終わるとカメラに戻ります。"
+            " カメラ表示中はエフェクトと飛ぶ文字が半透明で重なります（濃さは上で調整）。")
+        hint.setProperty("class", "small")
+        hint.setWordWrap(True)
+        gl.addWidget(hint, 3, 0, 1, 3)
+
+        self._refresh_camera_devices(emit_log=False)
+        return box
+
+    def _refresh_camera_devices(self, emit_log: bool = True) -> None:
+        devices = QMediaDevices.videoInputs()
+        current_id = self.display.current_camera_id()
+        self.cbCameraDev.blockSignals(True)
+        self.cbCameraDev.clear()
+        if not devices:
+            self.cbCameraDev.addItem("(カメラなし)", "")
+            self.cbCameraDev.blockSignals(False)
+            if emit_log:
+                self._log_local("ADMIN", "カメラ一覧更新: 検出なし")
+            return
+        target_row = 0
+        for i, dev in enumerate(devices):
+            dev_id = bytes(dev.id()).decode("utf-8", "replace")
+            self.cbCameraDev.addItem(dev.description(), dev_id)
+            if current_id and dev_id == current_id:
+                target_row = i
+        self.cbCameraDev.setCurrentIndex(target_row)
+        self.cbCameraDev.blockSignals(False)
+        # Drive the selection explicitly (blockSignals swallowed the
+        # programmatic setCurrentIndex) so display-side state matches
+        # what the combo shows.
+        picked_id = self.cbCameraDev.currentData()
+        if picked_id and picked_id != current_id:
+            self.display.set_camera_device(picked_id)
+        if emit_log:
+            self._log_local("ADMIN",
+                            f"カメラ一覧更新: {len(devices)} 台検出")
+
+    def _on_camera_device_picked(self, idx: int) -> None:
+        if idx < 0:
+            return
+        dev_id = self.cbCameraDev.itemData(idx)
+        if not dev_id:
+            return
+        if dev_id == self.display.current_camera_id():
+            return
+        ok = self.display.set_camera_device(dev_id)
+        name = self.cbCameraDev.itemText(idx)
+        self._log_local("ADMIN",
+                        f"カメラ切替: {name}" if ok
+                        else f"カメラ切替失敗: {name}")
+
+    def _on_camera_toggle_clicked(self, checked: bool) -> None:
+        self.display.set_camera_mode(checked)
+        self.btnCameraMode.setText(
+            "カメラ表示 ON" if checked else "カメラ表示 OFF")
+        self.btnCameraMode.setProperty(
+            "class", "toggleOn" if checked else "toggleOff")
+        _repolish(self.btnCameraMode)
+        self._log_local("ADMIN",
+                        "カメラ表示 ON (エフェクト・文字は半透明)"
+                        if checked else "カメラ表示 OFF")
+
+    def _on_cam_fx_opacity_changed(self, v: int) -> None:
+        self.display.set_camera_fx_opacity(v / 100.0)
+
+    def _on_cam_marquee_opacity_changed(self, v: int) -> None:
+        self.display.set_camera_marquee_opacity(v / 100.0)
+
+    def _on_cam_portrait_toggled(self, on: bool) -> None:
+        self.display.set_camera_portrait(on)
+        self._log_local("ADMIN",
+                        "カメラ縦型 9:16 クロップ ON" if on
+                        else "カメラ全体表示 (レターボックス)")
+
+    def _on_cam_crop_changed(self, _v: int) -> None:
+        self.display.set_camera_crop_cx(self.spCamCropX.value() / 100.0)
+        self.display.set_camera_crop_cy(self.spCamCropY.value() / 100.0)
+        self.display.set_camera_crop_zoom(self.spCamCropZoom.value() / 100.0)
 
     # ---- piano roll (USB MIDI) controls ----
     def _build_piano_box(self) -> QWidget:
@@ -1126,8 +1353,9 @@ class ControlWindow(QWidget):
         ip = _local_ip() if host in ("0.0.0.0", "") else host
         self.lblUrl.setText(f"http://{ip}:{port}/   (本機: http://127.0.0.1:{port}/)")
 
-    def set_initial_volume(self, v: int) -> None:
-        self.volSlider.setValue(v)
+    def set_initial_volumes(self, fx: int, ext: int) -> None:
+        self.volFxSlider.setValue(fx)
+        self.volExtSlider.setValue(ext)
 
     def set_initial_accept(self, v: bool) -> None:
         self.btnAccept.setChecked(v)
@@ -1411,10 +1639,17 @@ class ControlWindow(QWidget):
         _repolish(self.btnAccept)
         self.bridge.set_accept(checked)
 
-    def _on_volume_changed(self, v: int) -> None:
-        self.lblVol.setText(f"{v} / 100")
+    def _on_fx_volume_changed(self, v: int) -> None:
+        self.lblVolFx.setText(f"{v} / 100")
+        self.audio.set_fx_volume(v)
+
+    def _on_ext_volume_changed(self, v: int) -> None:
+        self.lblVolExt.setText(f"{v} / 100")
+        # The browser-facing /status volume reflects the external gain —
+        # that's the one that governs how loud a listener's own content plays.
         self.bridge.set_volume(v)
-        self.audio.set_volume(v)
+        self.audio.set_ext_volume(v)
+        self.display.set_video_volume(v / 100.0)
 
     def _local_fx(self, kind: str) -> None:
         import time

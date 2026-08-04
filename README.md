@@ -126,8 +126,11 @@ http://192.168.1.23:8080/
   リモート URL、流れ中メッセージ数、接続中クライアント数を表示します。
 - FX ボタン
   `BOMB / CHEER / HEARTS / STARS / SNOW / PETALS / AURORA / LASER / SUNSET / LEAVES / MARQUEE STOP`
-- 音量スライダ
-  TALK、効果音、ローカル音声ファイル再生に適用されます。
+- 音量スライダ（2 本）
+  - `効果音` — BOMB / CHEER などのアイテム効果音の音量。
+  - `外部音声` — リスナーからの TALK・アップロード音声・動画音声の音量。
+  効果音は合成音で大きめ、リスナーの音は小さめになりがちなので、
+  別々にバランスを取れます。
 
 ### キュータブ
 
@@ -168,6 +171,17 @@ http://192.168.1.23:8080/
 - 全画面切替
 - ローカル画像 / 動画 / 音声ファイルの再生
 - 画像表示秒数の調整
+- 📷 カメラ表示 (USB / 仮想カメラ) — **既定で ON**
+  - USB カメラや OBS などの仮想カメラの映像を待受背景として表示します。
+  - 映像は 9:16 (720x1280) の縦型枠で切り出され、縦横同率で拡大されます
+    （アスペクト比は変わりません）。`位置X / 位置Y / ズーム` で映像内の
+    狙った場所を枠に合わせます。`縦型 9:16 クロップ` を外すと全体を
+    レターボックス表示します。
+  - カメラ表示中はエフェクトと横スクロール文字が半透明で重なります。
+    濃さ（不透明度）は `効果の濃さ` / `文字の濃さ` で 0〜100 % に調整可能。
+  - 写真・動画がアップロードされた間はそちらが優先され、終わると
+    カメラ映像に戻ります。ピアノロール演出中はピアノロールが優先。
+- 🎹 ピアノロール (USB MIDI)
 
 ### ユーザータブ
 
@@ -328,7 +342,9 @@ http_host       = 0.0.0.0
 http_port       = 8080
 
 # ---- Audio / behaviour ----
-startup_volume  = 80
+startup_volume  = 80          ; 両グループ共通のフォールバック
+;startup_fx_volume  = 60      ; 効果音 (BOMB/CHEER 等) の起動時音量
+;startup_ext_volume = 90      ; 外部音声 (TALK・音声・動画) の起動時音量
 accept_on_boot  = true
 debounce_ms     = 300
 
@@ -344,6 +360,16 @@ control_screen  = -1
 # ---- Media playback ----
 image_display_sec  = 180
 media_min_play_sec = 60
+
+# ---- Live camera (USB / 仮想カメラ) ----
+camera_on_boot = true         ; カメラ待受モード（既定 ON）
+camera_device  =              ; 空=既定カメラ / 名前の部分一致で選択 (例: OBS)
+camera_fx_opacity_pct      = 55   ; カメラ表示中のエフェクト不透明度 (0..100)
+camera_marquee_opacity_pct = 75   ; カメラ表示中の流れる文字の不透明度 (0..100)
+camera_portrait_crop = true   ; 9:16 (720x1280) 縦型切り出し
+camera_crop_cx_pct   = 50     ; 切り出し中心の横位置 (0..100)
+camera_crop_cy_pct   = 50     ; 切り出し中心の縦位置 (0..100)
+camera_crop_zoom_pct = 100    ; 100=最大範囲 .. 800=8倍ズーム
 
 # ---- Marquee ----
 marquee_size    = 64
