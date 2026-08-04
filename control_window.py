@@ -1011,6 +1011,7 @@ class ControlWindow(QWidget):
         picked_id = self.cbCameraDev.currentData()
         if picked_id and picked_id != current_id:
             self.display.set_camera_device(picked_id)
+        self._sync_camera_portrait_checkbox()
         if emit_log:
             self._log_local("ADMIN",
                             f"カメラ一覧更新: {len(devices)} 台検出")
@@ -1025,9 +1026,18 @@ class ControlWindow(QWidget):
             return
         ok = self.display.set_camera_device(dev_id)
         name = self.cbCameraDev.itemText(idx)
+        self._sync_camera_portrait_checkbox()
         self._log_local("ADMIN",
                         f"カメラ切替: {name}" if ok
                         else f"カメラ切替失敗: {name}")
+
+    def _sync_camera_portrait_checkbox(self) -> None:
+        """Reflect the display's effective crop mode without recording it
+        as an operator preference (device switches recompute it:
+        per-device memory > virtual-camera full-frame default)."""
+        self.chkCamPortrait.blockSignals(True)
+        self.chkCamPortrait.setChecked(self.display._camera_portrait)
+        self.chkCamPortrait.blockSignals(False)
 
     def _on_camera_toggle_clicked(self, checked: bool) -> None:
         self.display.set_camera_mode(checked)

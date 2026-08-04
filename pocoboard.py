@@ -174,7 +174,10 @@ def main() -> int:
     display.set_video_volume(max(0, min(100, startup_ext_volume)) / 100.0)
     display.set_camera_fx_opacity(max(0, min(100, camera_fx_op)) / 100.0)
     display.set_camera_marquee_opacity(max(0, min(100, camera_mq_op)) / 100.0)
-    display.set_camera_portrait(camera_portrait)
+    # Config default applies to physical (Qt/MF) cameras; virtual cameras
+    # (ManyCam / OBS via the DirectShow backend) default to full-frame —
+    # their picture is already composed, cropping it would slice the sides.
+    display.set_camera_portrait_default(camera_portrait)
     display.set_camera_crop_cx(max(0, min(100, camera_crop_cx)) / 100.0)
     display.set_camera_crop_cy(max(0, min(100, camera_crop_cy)) / 100.0)
     display.set_camera_crop_zoom(max(100, min(800, camera_crop_zoom)) / 100.0)

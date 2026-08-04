@@ -999,3 +999,29 @@ QMediaDevices import dropped.  No UI shape change.
   GUI thread; if it ever matters, decimate to 15 fps or move to a
   worker thread).
 
+## Per-device portrait-crop policy (2026-08-05)
+
+User report: ManyCam の映像が POCOBoard 側で左右が切れて細くなる。
+Cause: the 9:16 portrait crop (built for aiming a RAW USB camera at a
+phone) was slicing a ~607px-wide vertical strip out of ManyCam's
+already-composed 1920x1080 output.  The user worked around it by
+unchecking 縦型クロップ; this change makes that automatic.
+
+- `display_window.py`: effective crop mode is now computed per device:
+  **explicit operator choice (remembered per camera ident in
+  `_camera_crop_pref`, session-only) > backend default** — dshow
+  (virtual cams: ManyCam / OBS / NVIDIA Broadcast) → full frame;
+  qt (physical cams) → `_camera_portrait_default` from config.
+  `set_camera_portrait()` (UI checkbox) records the per-device pref;
+  new `set_camera_portrait_default()` is what pocoboard.py feeds from
+  `camera_portrait_crop`.  `_apply_camera_crop_pref()` runs on every
+  device selection incl. the auto-resolve fallbacks in _start_camera.
+- `control_window.py`: `_sync_camera_portrait_checkbox()` (blockSignals
+  so syncing isn't recorded as an operator choice) after device pick /
+  list refresh.
+- Crop position/zoom (位置X/Y・ズーム) stay global, only ON/OFF is
+  per-device — revisit if an operator actually needs per-device aim.
+- Verified: ManyCam select → crop OFF, USB cam → ON (config),
+  overrides remembered independently per device across switches;
+  camera-overlay regression green; live boot green.
+

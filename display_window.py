@@ -201,6 +201,14 @@ class DisplayWindow(QWidget):
         self._camera_crop_cx:   float = 0.5   # crop-center X, fraction of frame width
         self._camera_crop_cy:   float = 0.5   # crop-center Y, fraction of frame height
         self._camera_crop_zoom: float = 1.0   # 1.0 = largest 9:16 crop that fits
+        # Portrait-crop policy.  The 9:16 crop exists to cut a phone-
+        # shaped region out of a RAW camera frame — but virtual cameras
+        # (ManyCam / OBS, i.e. the dshow backend) deliver an already-
+        # composed picture, and cropping that slices off its sides.  So:
+        # explicit per-device operator choice > backend default
+        # (qt/physical → config default, dshow/virtual → full frame).
+        self._camera_portrait_default: bool = True
+        self._camera_crop_pref: dict[str, bool] = {}
 
     # ---------- activity tracking ----------
     def _mark_activity(self) -> None:
@@ -370,8 +378,35 @@ class DisplayWindow(QWidget):
 
     @Slot(bool)
     def set_camera_portrait(self, on: bool) -> None:
-        """Toggle the 9:16 portrait crop (True) vs full-frame letterbox."""
+        """Toggle the 9:16 portrait crop (True) vs full-frame letterbox.
+
+        Called from the operator UI — the choice is remembered for the
+        currently selected device and restored when switching back."""
         self._camera_portrait = bool(on)
+        ident = self.current_camera_id()
+        if ident:
+            self._camera_crop_pref[ident] = self._camera_portrait
+        self._dirty = True
+
+    @Slot(bool)
+    def set_camera_portrait_default(self, on: bool) -> None:
+        """Boot-config default for the 9:16 crop.  Applies to physical
+        (Qt/MF) cameras; virtual cameras (dshow backend) default to
+        full-frame regardless, unless the operator overrides."""
+        self._camera_portrait_default = bool(on)
+        self._apply_camera_crop_pref()
+
+    def _apply_camera_crop_pref(self) -> None:
+        """Recompute the effective crop mode for the current device."""
+        ident = self.current_camera_id()
+        if ident and ident in self._camera_crop_pref:
+            self._camera_portrait = self._camera_crop_pref[ident]
+        elif self._camera_backend == "dshow":
+            # ManyCam / OBS compose their picture themselves — cropping
+            # it again slices off the sides.  Show it whole.
+            self._camera_portrait = False
+        else:
+            self._camera_portrait = self._camera_portrait_default
         self._dirty = True
 
     @Slot(float)
@@ -431,6 +466,7 @@ class DisplayWindow(QWidget):
             self._dshow_ident = dev_ident
             self._dshow_desc = desc
             self._camera_device = None
+        self._apply_camera_crop_pref()
         if self._camera_mode:
             self._start_camera()
         return True
@@ -483,6 +519,7 @@ class DisplayWindow(QWidget):
                 self._camera_backend = "dshow"
                 self._dshow_ident = dev_ident
                 self._dshow_desc = desc
+                self._apply_camera_crop_pref()
                 self._start_camera_dshow()
                 return
             dev = self._qt_device_by_id(dev_ident)
@@ -490,6 +527,7 @@ class DisplayWindow(QWidget):
                 print("[camera] no capture devices available")
                 return
             self._camera_device = dev
+            self._apply_camera_crop_pref()
         try:
             self._camera_sink = QVideoSink(self)
             self._camera_sink.videoFrameChanged.connect(self._on_camera_frame)
