@@ -1090,9 +1090,10 @@ Two independent, composable features:
 
 ## Next session pickup (2026-08-05, session closed)
 
-State: everything through commit `aa5f5eb` is pushed to
-github.com/OwaHigashi/POCOBoard main.  Working tree clean except this
-doc update.  No code in flight, no half-finished refactors.
+State: everything through commit `9cef131` is pushed to
+github.com/OwaHigashi/POCOBoard main (incl. the stretch-mode camera
+full-bleed + translucent piano roll — see the section further below).
+Working tree clean.  No code in flight, no half-finished refactors.
 
 ### What shipped in the 2026-08-04..05 sessions (all pushed)
 
@@ -1119,16 +1120,23 @@ doc update.  No code in flight, no half-finished refactors.
 
 ### Awaiting real-rig verification (top of next session)
 
-1. **Capture-board portrait chain** — the reason for `aa5f5eb`.  User
-   should enable 表示 tab → 縦横補正 (camera box) and/or 縦型出力補正
-   (global checkbox) and eyeball: camera proportions correct, FX /
-   marquee text acceptable under the non-uniform stretch on the real
-   output, no clipping.  If text AA looks bad, consider compositing
+1. **Capture-board portrait chain** — first attempt (`aa5f5eb`)
+   letterboxed the camera and the user reported "更に細くなった";
+   fixed in `9cef131` (camera full-bleed in stretch mode).  User
+   should re-test 縦型出力補正 on the rig: camera should now fill the
+   output and return to true proportions downstream.  If the
+   direction is STILL wrong, combine with per-camera 縦横補正; an
+   inverted output transform was considered and rejected (see the
+   9cef131 section).  Also eyeball FX / marquee text quality under
+   the non-uniform stretch; if AA looks bad, consider compositing
    into an offscreen portrait QImage instead of the painter-scale
-   approach (noted alternative in the 2026-08-05 section).
-2. Volume balance (効果音 vs 外部音声 sliders) with real TALK + FX
+   approach.
+2. **Piano roll over camera** (`9cef131`) — verify on the rig that
+   the roll at 65 % keeps both the camera and the notes readable;
+   tune via 「カメラ表示中のロールの濃さ」.
+3. Volume balance (効果音 vs 外部音声 sliders) with real TALK + FX
    side by side.
-3. Long-run stability of dshow GetCurrentImage polling (~10 ms/frame
+4. Long-run stability of dshow GetCurrentImage polling (~10 ms/frame
    @1080p on the GUI thread) and ManyCam app start/stop while
    POCOBoard is capturing.
 
