@@ -1,6 +1,6 @@
 # Agent Handoff
 
-Updated: 2026-08-05 (anamorphic portrait corrections + DirectShow cams)
+Updated: 2026-08-05 (session closed — see "Next session pickup" at the end)
 
 ## Summary
 
@@ -1087,4 +1087,60 @@ Two independent, composable features:
   the physically-portrait output display (needs the deploy rig).
   Fonts/AA under the non-uniform transform look fine in offscreen
   grabs but deserve an eyeball on the real 4K output.
+
+## Next session pickup (2026-08-05, session closed)
+
+State: everything through commit `aa5f5eb` is pushed to
+github.com/OwaHigashi/POCOBoard main.  Working tree clean except this
+doc update.  No code in flight, no half-finished refactors.
+
+### What shipped in the 2026-08-04..05 sessions (all pushed)
+
+1. `9506032` — split FX / external volume (2 sliders) + camera default
+   mode with portrait 9:16 crop + piano/marquee overlay opacities.
+2. `42301ac` — performance pass: conditional repaint (idle 60fps→2Hz
+   heartbeat), frame/photo scaling caches, occluded-camera conversion
+   skip, TALK resample fast path (~90x), single-speaker mixer fast
+   path, marquee font cache + status-signal throttle.
+3. `ca243c9` — `dshow_camera.py`: DirectShow backend (ctypes COM,
+   VMR9 windowless + GetCurrentImage polling) so ManyCam / OBS
+   virtual cameras appear and capture; unified camera list.
+4. `b8f18aa` — per-device crop policy: virtual cams default to
+   full-frame, per-device ON/OFF memory (session-only).
+5. `aa5f5eb` — anamorphic corrections: per-camera 縦横補正 (ingest
+   un-squeeze, `camera_swap_aspect`) + global 縦型出力補正
+   (whole-screen 9:16 compose → 16:9 stretch,
+   `display_portrait_stretch`).
+
+### User-confirmed working
+
+- ManyCam is now recognized and, after the per-device crop default,
+  displays full-width (user confirmed the crop was the cause).
+
+### Awaiting real-rig verification (top of next session)
+
+1. **Capture-board portrait chain** — the reason for `aa5f5eb`.  User
+   should enable 表示 tab → 縦横補正 (camera box) and/or 縦型出力補正
+   (global checkbox) and eyeball: camera proportions correct, FX /
+   marquee text acceptable under the non-uniform stretch on the real
+   output, no clipping.  If text AA looks bad, consider compositing
+   into an offscreen portrait QImage instead of the painter-scale
+   approach (noted alternative in the 2026-08-05 section).
+2. Volume balance (効果音 vs 外部音声 sliders) with real TALK + FX
+   side by side.
+3. Long-run stability of dshow GetCurrentImage polling (~10 ms/frame
+   @1080p on the GUI thread) and ManyCam app start/stop while
+   POCOBoard is capturing.
+
+### Open design notes / possible next steps
+
+- Crop/swap per-device memory is session-only; persist to config or a
+  small state file if the operator asks.
+- Crop position/zoom (位置X/Y・ズーム) are still global, not
+  per-device.
+- 縦型出力補正 + 縦型9:16クロップ both on means the portrait camera
+  fills the portrait canvas — correct, but zoom/aim still apply; check
+  operator expectations on the rig.
+- If dshow polling cost ever matters: decimate to 15 fps or move the
+  grab to a worker thread.
 
