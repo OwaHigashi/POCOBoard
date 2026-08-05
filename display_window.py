@@ -13,7 +13,6 @@ All state-change entry points are Qt slots, so they can be called from
 signals fired on any thread.
 """
 from __future__ import annotations
-import math
 import os
 import time
 from typing import Optional
@@ -202,29 +201,30 @@ class DisplayWindow(QWidget):
         # picture horizontally by an adjustable factor about the window's
         # center axis (parts pushed past the edges are simply clipped).
         # 1.0 = no stretch.  Default set from config (camera_hstretch_pct,
-        # shipped default 285 % — calibrated on the operator's rig; equals
-        # the single-stage squeeze squared (1.688^2), the ideal-chain
-        # theory value being (16/9)^2 ~= 316 %, see README).
-        self._camera_hstretch: float = 2.85
+        # shipped default 297 % — calibrated on the operator's rig
+        # 2026-08-06.  Measurement showed the camera needs the SAME
+        # correction as the drawn layers (the chain has one squeeze, at
+        # the output; an earlier camera-is-squeezed-twice model predicted
+        # camera = drawn^2 and did not survive the rig test).
+        self._camera_hstretch: float = 2.97
 
         # --- output horizontal correction for the DRAWN layers ---
-        # The output signal goes through ONE downstream horizontal
+        # The output signal goes through one downstream horizontal
         # squeeze (landscape signal crammed onto the portrait panel), so
         # everything POCOBoard draws itself — FX scenes, marquee text,
         # piano roll, uploaded photos / videos, idle title — must be
-        # pre-stretched by ONE squeeze stage to look right on the final
-        # display.  (The camera picture is different: it arrives already
-        # squeezed once by the capture board, so it needs the squeeze
-        # SQUARED — that is the separate _camera_hstretch above, default
-        # 2.85 = 1.688^2.)
+        # pre-stretched to look right on the final display.  Rig
+        # calibration (2026-08-06) put this at the SAME 297 % as the
+        # camera; the two remain independently tunable in case the
+        # chain ever changes.
         # Implementation: those layers compose on a NARROWER virtual
         # canvas (round(w / factor), h) and paintEvent stretches the
         # composition horizontally to fill the physical window — nothing
         # is clipped, the vertical size is untouched, and e.g. the piano
         # keyboard lays out all 88 keys across the virtual width so the
         # full keyboard spans the final screen.  1.0 = off.  Config
-        # output_hstretch_pct, shipped default 169 ≈ sqrt(2.85).
-        self._output_hstretch: float = math.sqrt(2.85)
+        # output_hstretch_pct, shipped default 297.
+        self._output_hstretch: float = 2.97
 
     # ---------- activity tracking ----------
     def _mark_activity(self) -> None:
@@ -274,6 +274,8 @@ class DisplayWindow(QWidget):
         self._scene = None
         if self._piano_scene is not None:
             self._piano_scene.resize(vw, vh)
+            self._piano_scene.set_kb_frac(
+                PianoRollScene.KEYBOARD_HEIGHT_FRAC / factor)
         self._dirty = True
 
     # ---------- public slots (called from any thread via QueuedConnection) ----------
@@ -635,8 +637,14 @@ class DisplayWindow(QWidget):
             # (see paintEvent).  Triggers a repaint so the new base layer
             # appears immediately.
             vw, vh = self._virtual_size()
+            # Keyboard height shrinks with the output correction — the
+            # correction narrows key widths on the composition canvas,
+            # so the height follows the same ratio to keep real piano
+            # key proportions on the final screen.
             self._piano_scene = PianoRollScene(
-                vw, vh, scroll_pps=self._piano_scroll_pps)
+                vw, vh, scroll_pps=self._piano_scroll_pps,
+                kb_frac=(PianoRollScene.KEYBOARD_HEIGHT_FRAC
+                         / self._output_hstretch))
             self._mark_activity()
         else:
             # Release every held note and drop the scene.

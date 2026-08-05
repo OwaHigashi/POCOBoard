@@ -1325,3 +1325,44 @@ stage, sqrt(2.85) ≈ 1.69.
 - NOT verified on the rig: that 169 % makes BOMB circles round and
   the keyboard fill the final screen — if slightly off, tune the
   spinbox; the "pure theory" anchor is sqrt(316) ≈ 178 %.
+
+## Both corrections recalibrated to 297 % (2026-08-06, rig-measured)
+
+The operator did a detailed rig investigation: camera AND drawn-layer
+(効果) corrections both belong at 297 %.  This falsifies the previous
+"camera is squeezed twice → camera = drawn²" model — in reality the
+capture ingest adds no squeeze; the chain distorts once, at the
+output, by ≈ 2.97 (numerically close to (16/9)·(5/3) = 2.963 and a bit
+under (16/9)² = 3.16, but 297 is the measured value — treat it as
+empirical, not derived).
+
+- Defaults updated 285→297 (camera) and 169→297 (output/drawn) in
+  display_window state, pocoboard config defaults, config.example.ini,
+  README, and both tooltips.  All sqrt/squared reasoning removed from
+  docs and comments; the two spinboxes stay independent but should
+  normally hold the SAME value now.
+- `import math` dropped again from display_window (sqrt gone).
+- Offscreen test updated (defaults assert 2.97; 297 % sliver checks at
+  x=1 / x=1598 since the visible-window rounding leaves only ~9 px
+  slivers) — ALL OK; boot smoke green.
+
+### Follow-up: keyboard height scales with the correction (same day)
+
+User: 「鍵盤の縦幅が変わらないので、鍵盤が異様です。縦幅は逆に割合に
+応じて短くしてください。」  Right — the correction narrows key WIDTHS
+on the composition canvas but the keyboard band stayed at 18 % of the
+height, so keys came out ~1:17 elongated on the final screen.
+
+- `animations.py`: `PianoRollScene` keyboard height fraction is now an
+  instance attr `kb_frac` (ctor kwarg, default KEYBOARD_HEIGHT_FRAC =
+  0.18) + `set_kb_frac()` (clamped 0.02..0.5); `_keyboard_top_px`
+  uses it.
+- `display_window.py`: scene creation passes
+  `kb_frac = 0.18 / _output_hstretch`; `set_output_hstretch` updates a
+  live scene via `set_kb_frac`.  At the shipped 297 % this puts the
+  keyboard at ~6 % of the canvas → on the final portrait screen keys
+  are ~5.6:1 tall:wide, close to a real piano.  No new config key —
+  it is derived from `output_hstretch_pct`.
+- Test extended: with output hstretch 2.0 the keyboard top moves from
+  y=738 (18 %) to y=819 (9 %) on a 900px window — asserts bright keys
+  at y=850/880, dark roll at y=780.  ALL OK.

@@ -856,9 +856,9 @@ class ControlWindow(QWidget):
             "エフェクト・飛ぶ文字・ピアノロール・写真・動画を横に狭い仮想画面で\n"
             "構成してから横一杯に引き延ばして出力します。出力チェーンの圧縮で\n"
             "正しい比率に戻り、ピアノロールは全 88 鍵が最終画面の横幅に並びます。\n"
-            "100 % = 補正なし / 169 % = 既定（カメラの横引き延ばし 285 % の\n"
-            "平方根 — 圧縮一段分）。変更時、流れている文字と実行中の効果は\n"
-            "一旦クリアされます。カメラ映像は上のカメラ欄で別途補正します。")
+            "100 % = 補正なし / 297 % = 既定（実機で校正。カメラの横引き延ばしと\n"
+            "同じ値）。変更時、流れている文字と実行中の効果は一旦クリアされます。\n"
+            "カメラ映像は上のカメラ欄で別途補正します。")
         self.spOutputHStretch.valueChanged.connect(self._on_output_hstretch_changed)
         out_row.addWidget(self.spOutputHStretch)
         out_row.addStretch(1)
@@ -969,9 +969,8 @@ class ControlWindow(QWidget):
             int(round(self.display._camera_hstretch * 100)))
         self.spCamHStretch.setToolTip(
             "カメラ映像を縦はそのまま、横方向だけ中央軸を基準に引き延ばします。\n"
-            "100 % = 引き延ばしなし / 285 % = 既定（実機で校正。圧縮が入口と\n"
-            "出口で二重にかかるため、一段分 ≈1.69 倍の二乗）。\n"
-            "画面からはみ出した左右はそのまま切れます。")
+            "100 % = 引き延ばしなし / 297 % = 既定（実機で校正。演出の横補正と\n"
+            "同じ値）。画面からはみ出した左右はそのまま切れます。")
         self.spCamHStretch.valueChanged.connect(self._on_cam_hstretch_changed)
         st_row.addWidget(self.spCamHStretch)
         st_row.addStretch(1)

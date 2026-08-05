@@ -106,13 +106,13 @@ def main() -> int:
     # Horizontal-only stretch of the camera picture (vertical untouched,
     # centered on the middle axis) — compensates capture chains that
     # deliver a horizontally squeezed picture.  100 = no stretch;
-    # shipped default 285 (calibrated on the deploy rig).
-    camera_hstretch  = cfg.get_int("camera_hstretch_pct", 285)
+    # shipped default 297 (calibrated on the deploy rig 2026-08-06).
+    camera_hstretch  = cfg.get_int("camera_hstretch_pct", 297)
     # Output horizontal correction for the layers POCOBoard draws itself
-    # (FX / marquee / piano roll / photos / videos): ONE squeeze stage,
-    # i.e. the square root of the camera's double-squeeze correction.
-    # 100 = off; shipped default 169 ≈ sqrt(285 %).
-    output_hstretch  = cfg.get_int("output_hstretch_pct", 169)
+    # (FX / marquee / piano roll / photos / videos).  100 = off; shipped
+    # default 297 — rig calibration found the drawn layers need the
+    # same correction as the camera.
+    output_hstretch  = cfg.get_int("output_hstretch_pct", 297)
     piano_pps     = cfg.get_int("piano_scroll_pps", 110)
     piano_fx_op   = cfg.get_int("piano_fx_opacity_pct", 55)
     piano_roll_op = cfg.get_int("piano_roll_opacity_pct", 65)

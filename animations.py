@@ -1722,10 +1722,17 @@ class PianoRollScene(Scene):
     MAX_NOTE = 108      # C8
     KEYBOARD_HEIGHT_FRAC = 0.18
 
-    def __init__(self, w: int, h: int, scroll_pps: float = 110.0) -> None:
+    def __init__(self, w: int, h: int, scroll_pps: float = 110.0,
+                 kb_frac: float | None = None) -> None:
         super().__init__(w, h)
         self.alive = True
         self.scroll_pps = float(scroll_pps)
+        # Keyboard height as a fraction of the canvas.  The display
+        # divides the default by the output horizontal correction: the
+        # correction narrows the key WIDTHS on the composition canvas,
+        # so the height must shrink by the same ratio or the keys come
+        # out absurdly elongated on the final screen.
+        self.kb_frac = float(kb_frac) if kb_frac else self.KEYBOARD_HEIGHT_FRAC
         self._now_ms = 0.0
         self._active: dict[int, dict] = {}      # note -> {start_ms, vel}
         # Each completed entry: {note, start_ms, end_ms, vel}.  Sorted by
@@ -1757,6 +1764,10 @@ class PianoRollScene(Scene):
         self.w = w
         self.h = h
         # No per-key cache to rebuild beyond what _build_layout already set.
+
+    def set_kb_frac(self, frac: float) -> None:
+        """Live-adjust the keyboard height fraction (notes stay intact)."""
+        self.kb_frac = max(0.02, min(0.5, float(frac)))
 
     # ---------- input from MidiEngine ----------
     def note_on(self, note: int, velocity: int) -> None:
@@ -1804,7 +1815,7 @@ class PianoRollScene(Scene):
         return True
 
     def _keyboard_top_px(self) -> float:
-        return max(60.0, self.h * (1.0 - self.KEYBOARD_HEIGHT_FRAC))
+        return max(60.0, self.h * (1.0 - self.kb_frac))
 
     # ---------- drawing ----------
     def draw(self, p: QPainter, w: int, h: int) -> None:
