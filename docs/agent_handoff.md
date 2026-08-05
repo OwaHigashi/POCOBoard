@@ -1,6 +1,6 @@
 # Agent Handoff
 
-Updated: 2026-08-05 (camera 横引き延ばし replaces portrait crop + swap)
+Updated: 2026-08-06 (both hstretch corrections calibrated to 297 %, piano keyboard height follows)
 
 ## Summary
 
@@ -1366,3 +1366,66 @@ height, so keys came out ~1:17 elongated on the final screen.
 - Test extended: with output hstretch 2.0 the keyboard top moves from
   y=738 (18 %) to y=819 (9 %) on a 900px window — asserts bright keys
   at y=850/880, dark roll at y=780.  ALL OK.
+
+## Next session pickup (2026-08-06, session closed)
+
+State: everything through commit `2f25e5a` is pushed to
+github.com/OwaHigashi/POCOBoard main.  Working tree clean.  No code in
+flight.
+
+### Current anamorphic-correction model (rig-calibrated, do not revert)
+
+The output chain applies ONE horizontal squeeze; the capture ingest
+adds none.  Correction is therefore the same for everything, measured
+at **297 %**:
+
+- Camera picture: `camera_hstretch_pct = 297` — drawn in PHYSICAL
+  window coords, letterbox then widen about the center axis, overflow
+  clipped (`_draw_camera_frame`).
+- Drawn layers (FX / marquee / piano roll / photos / videos / idle
+  title): `output_hstretch_pct = 297` — composed on the narrow virtual
+  canvas `(round(w/f), h)` via `_virtual_size()` and stretched to full
+  width by `_vpush/_vpop` in paintEvent.  Camera must NEVER also pass
+  through this transform (would double-correct).
+- Piano keyboard height auto-derives as `0.18 / output_hstretch`
+  (≈6 % at 297 %) so keys keep real-piano proportions; no config key.
+
+Dead ends already removed — do not resurrect: 縦型9:16クロップ,
+縦横補正 (ingest swap), 縦型出力補正 (transposed 9:16 canvas), and the
+"camera needs the squeeze SQUARED" model (285 %/169 % era).
+
+### What shipped this session (2026-08-05..06, all pushed)
+
+1. `dd7f7c1` — camera 横引き延ばし replaces 9:16 crop + aspect swap.
+2. `2313a91` / `4b6b0a6` — camera default calibrated 290 → 285.
+3. `80285b0` — output horizontal correction for drawn layers
+   (virtual-canvas compose + stretch), replaces 縦型出力補正.
+4. `2f25e5a` — both corrections settled at 297 %; piano keyboard
+   height scales inversely with the correction.
+
+### User-confirmed working on the rig
+
+- Camera picture proportions correct at 297 % (user's detailed
+  investigation settled the value).
+
+### Awaiting real-rig verification (top of next session)
+
+1. FX shapes at 297 % (BOMB circles round?  LEAVES natural?) and
+   marquee glyph proportions on the final screen.
+2. Piano roll: full 88-key keyboard spanning the final screen width
+   with the shrunken (~6 %) keyboard height — user reported the
+   elongated-keys problem and the fix shipped in `2f25e5a` but has
+   not yet been eyeballed on the rig.
+3. Uploaded photos / videos now letterbox inside the narrow virtual
+   canvas and stretch — verify a listener-uploaded photo looks right
+   downstream.
+4. Still open from earlier sessions: volume balance (効果音 vs
+   外部音声) with real TALK + FX; long-run dshow GetCurrentImage
+   polling stability; ManyCam app start/stop while capturing.
+
+### Possible next steps
+
+- If keyboard height taste needs tuning, expose the 0.18 base as a
+  config key (currently hard-derived).
+- Per-device camera hstretch memory (currently global) if the
+  operator ever mixes corrected + uncorrected cameras.
