@@ -1260,3 +1260,20 @@ now the shipped default.
 - NOT verified on the rig: whether 168 % actually matches the capture
   chain — the operator should nudge the spinbox live and, once happy,
   set `camera_hstretch_pct` in config.ini to make it stick.
+
+## hstretch default recalibrated to 290 % (2026-08-05, rig-verified)
+
+The operator tuned the spinbox on the real rig: 「290%ぐらいで丁度」.
+Shipped default updated 168 → 290 everywhere (display_window state,
+pocoboard config default, config.example.ini, README, tooltip).
+
+Why 290: the horizontal squeeze is applied TWICE in this chain — once
+on ingest (portrait picture crammed into the landscape capture frame)
+and once on output (landscape 1920x1080 signal crammed onto the
+portrait panel) — so the width-only correction is the single-stage
+squeeze SQUARED.  The operator's own first eyeball (168 % ≈ 1.68) was
+one stage; 1.68² ≈ 2.82, √2.9 ≈ 1.70.  An ideal full-frame 16:9 chain
+would give (16/9)² ≈ 3.16 (316 %); the gap to 290 suggests one stage
+isn't a full-frame map (underscan, or source not exactly 16:9) — if
+the picture ever drifts, try 316 as the "pure theory" anchor.
+Offscreen test updated for the new default; all green.
