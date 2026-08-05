@@ -1,6 +1,6 @@
 # Agent Handoff
 
-Updated: 2026-08-05 (stretch-mode camera fill + piano roll over camera)
+Updated: 2026-08-05 (camera 横引き延ばし replaces portrait crop + swap)
 
 ## Summary
 
@@ -1204,3 +1204,59 @@ rejected — no realistic chain maps to it.
 - Not verified on the rig: the actual capture-board chain with the
   new fill behavior — next real-hardware check.
 
+
+## Camera 横引き延ばし replaces portrait crop + swap (2026-08-05, later)
+
+Rig feedback: 縦型9:16クロップ and 縦横補正 ended up producing the SAME
+picture (a narrow tall image) and neither was what the operator wanted
+— 「両方とも不要です」.  What they actually want is literal: keep the
+vertical size, stretch ONLY the width about the center axis by an
+adjustable factor.  Eyeballed factor 「1280/760倍のような」 ≈ 1.684 —
+now the shipped default.
+
+### Removed (features + all plumbing)
+
+- 縦型9:16クロップ: `_camera_portrait`, `_camera_crop_cx/cy/zoom`,
+  `_camera_portrait_default`, `_camera_crop_pref`, setters
+  `set_camera_portrait(_default)` / `set_camera_crop_cx/cy/zoom`,
+  the 720x1280 crop path in `_draw_camera_frame`, UI checkbox +
+  位置X/位置Y/ズーム spinboxes, config `camera_portrait_crop` /
+  `camera_crop_{cx,cy,zoom}_pct`.
+- 縦横補正 (ingest un-squeeze): `_camera_swap_aspect/_default/_pref`,
+  `set_camera_swap_aspect(_default)`, the transpose-restretch in
+  `_ingest_camera_frame`, UI checkbox, config `camera_swap_aspect`.
+- With both gone the whole per-device preference machinery
+  (`_apply_camera_crop_pref`, `_sync_camera_portrait_checkbox`) died
+  too.  Stale keys in an existing config.ini are silently ignored.
+
+### Added: horizontal-only stretch (`横引き延ばし`)
+
+- `display_window.py`: `_camera_hstretch` (float, default 1280/760),
+  `set_camera_hstretch(factor)` clamped 0.5..4.0.
+  `_draw_camera_frame` (non-output-stretch path): letterbox fit, then
+  dw *= hstretch; if dw <= w draw centered (pillarbox), else crop the
+  central `w/dw` fraction of the source and scale once to window width
+  (no offscreen pixels rendered — keeps `_cached_frame_pixmap` cheap).
+  Vertical size untouched either way; center axis unmoved.
+- `control_window.py`: 横引き延ばし QSpinBox (50..400 %, step 2) in the
+  camera box row 2 → `set_camera_hstretch(v/100)`.
+- `pocoboard.py` / `config.example.ini` / `README.md`: config key
+  `camera_hstretch_pct` (default 168, clamped 50..400).
+- 縦型出力補正 (`display_portrait_stretch`, whole-output transform) is
+  UNCHANGED and still available; in that mode the camera stays
+  full-bleed and hstretch does not apply (the full-bleed passthrough
+  is its own correction path).
+
+### Verification
+
+- `py_compile` display_window / control_window / pocoboard — clean.
+- Scratchpad `test_hstretch.py` (offscreen, real DisplayWindow, 3-band
+  color frame): 168 % shows the center band centered with edges
+  clipped and top/bottom rows still filled (vertical untouched); 100 %
+  = exact thirds letterbox; 50 % = centered pillarbox with black
+  edges; clamps hold; output-stretch mode still full-bleeds.  ALL OK.
+- Live offscreen boot: camera auto-starts (Live Streamer CAM 313),
+  control window builds, no exceptions.
+- NOT verified on the rig: whether 168 % actually matches the capture
+  chain — the operator should nudge the spinbox live and, once happy,
+  set `camera_hstretch_pct` in config.ini to make it stick.

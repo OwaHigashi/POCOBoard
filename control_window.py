@@ -945,67 +945,33 @@ class ControlWindow(QWidget):
         op_row.addStretch(1)
         gl.addLayout(op_row, 1, 0, 1, 3)
 
-        # Row 2: portrait 9:16 crop controls.  The camera frame is cropped
-        # to a 9:16 (720x1280) window and scaled uniformly — position /
-        # zoom pick WHICH part of the frame lands on screen.
-        crop_row = QHBoxLayout()
-        crop_row.setSpacing(8)
-        self.chkCamPortrait = QCheckBox("縦型 9:16 クロップ")
-        self.chkCamPortrait.setChecked(self.display._camera_portrait)
-        self.chkCamPortrait.setToolTip(
-            "ON: カメラ映像から 9:16 (720x1280) の範囲を切り出して縦型表示\n"
-            "OFF: カメラ映像全体をレターボックス表示")
-        self.chkCamPortrait.toggled.connect(self._on_cam_portrait_toggled)
-        crop_row.addWidget(self.chkCamPortrait)
-        self.chkCamSwap = QCheckBox("縦横補正")
-        self.chkCamSwap.setChecked(self.display._camera_swap_aspect)
-        self.chkCamSwap.setToolTip(
-            "キャプチャーボードが縦画面 (1080x1920) を横フレーム (1920x1080) に\n"
-            "押し込んで送ってくる場合の補正。フレームを縦横入れ替えたサイズに\n"
-            "引き伸ばし直して、つぶれを元に戻します。カメラごとに記憶されます。")
-        self.chkCamSwap.toggled.connect(self._on_cam_swap_toggled)
-        crop_row.addWidget(self.chkCamSwap)
-        crop_row.addSpacing(8)
-        crop_row.addWidget(QLabel("位置X:"))
-        self.spCamCropX = QSpinBox()
-        self.spCamCropX.setRange(0, 100)
-        self.spCamCropX.setSingleStep(5)
-        self.spCamCropX.setSuffix(" %")
-        self.spCamCropX.setMinimumHeight(30)
-        self.spCamCropX.setValue(int(round(self.display._camera_crop_cx * 100)))
-        self.spCamCropX.setToolTip("切り出し窓の中心の横位置（0=左端 / 50=中央 / 100=右端）")
-        self.spCamCropX.valueChanged.connect(self._on_cam_crop_changed)
-        crop_row.addWidget(self.spCamCropX)
-        crop_row.addWidget(QLabel("位置Y:"))
-        self.spCamCropY = QSpinBox()
-        self.spCamCropY.setRange(0, 100)
-        self.spCamCropY.setSingleStep(5)
-        self.spCamCropY.setSuffix(" %")
-        self.spCamCropY.setMinimumHeight(30)
-        self.spCamCropY.setValue(int(round(self.display._camera_crop_cy * 100)))
-        self.spCamCropY.setToolTip("切り出し窓の中心の縦位置（0=上端 / 50=中央 / 100=下端）")
-        self.spCamCropY.valueChanged.connect(self._on_cam_crop_changed)
-        crop_row.addWidget(self.spCamCropY)
-        crop_row.addWidget(QLabel("ズーム:"))
-        self.spCamCropZoom = QSpinBox()
-        self.spCamCropZoom.setRange(100, 800)
-        self.spCamCropZoom.setSingleStep(10)
-        self.spCamCropZoom.setSuffix(" %")
-        self.spCamCropZoom.setMinimumHeight(30)
-        self.spCamCropZoom.setValue(
-            int(round(self.display._camera_crop_zoom * 100)))
-        self.spCamCropZoom.setToolTip(
-            "100 % = 映像に収まる最大の 9:16 範囲 / 数値を上げるほど狙った場所に寄る")
-        self.spCamCropZoom.valueChanged.connect(self._on_cam_crop_changed)
-        crop_row.addWidget(self.spCamCropZoom)
-        crop_row.addStretch(1)
-        gl.addLayout(crop_row, 2, 0, 1, 3)
+        # Row 2: horizontal-only stretch.  The capture chain squeezes the
+        # picture horizontally, so the operator widens it back: vertical
+        # size stays put, width scales about the center axis.
+        st_row = QHBoxLayout()
+        st_row.setSpacing(8)
+        st_row.addWidget(QLabel("横引き延ばし:"))
+        self.spCamHStretch = QSpinBox()
+        self.spCamHStretch.setRange(50, 400)
+        self.spCamHStretch.setSingleStep(2)
+        self.spCamHStretch.setSuffix(" %")
+        self.spCamHStretch.setMinimumHeight(30)
+        self.spCamHStretch.setValue(
+            int(round(self.display._camera_hstretch * 100)))
+        self.spCamHStretch.setToolTip(
+            "カメラ映像を縦はそのまま、横方向だけ中央軸を基準に引き延ばします。\n"
+            "100 % = 引き延ばしなし / 168 % ≈ 1280÷760 (既定)。\n"
+            "画面からはみ出した左右はそのまま切れます。")
+        self.spCamHStretch.valueChanged.connect(self._on_cam_hstretch_changed)
+        st_row.addWidget(self.spCamHStretch)
+        st_row.addStretch(1)
+        gl.addLayout(st_row, 2, 0, 1, 3)
 
         # Row 3: hint
         hint = QLabel(
             "USB カメラや OBS などの仮想カメラの映像を待受画面として表示します。"
-            " 映像は 9:16 (720x1280) で切り出され、縦横同率で拡大されます"
-            "（比率は変わりません）。位置X/Y とズームで狙った場所を合わせてください。"
+            " 「横引き延ばし」は縦をそのままに横方向だけ中央基準で拡大します"
+            "（つぶれて届く映像の補正用。100 % で無補正）。"
             " 写真・動画がアップロードされた間はそちらが優先され、終わるとカメラに戻ります。"
             " カメラ表示中はエフェクトと飛ぶ文字が半透明で重なります（濃さは上で調整）。")
         hint.setProperty("class", "small")
@@ -1041,7 +1007,6 @@ class ControlWindow(QWidget):
         picked_id = self.cbCameraDev.currentData()
         if picked_id and picked_id != current_id:
             self.display.set_camera_device(picked_id)
-        self._sync_camera_portrait_checkbox()
         if emit_log:
             self._log_local("ADMIN",
                             f"カメラ一覧更新: {len(devices)} 台検出")
@@ -1056,21 +1021,9 @@ class ControlWindow(QWidget):
             return
         ok = self.display.set_camera_device(dev_id)
         name = self.cbCameraDev.itemText(idx)
-        self._sync_camera_portrait_checkbox()
         self._log_local("ADMIN",
                         f"カメラ切替: {name}" if ok
                         else f"カメラ切替失敗: {name}")
-
-    def _sync_camera_portrait_checkbox(self) -> None:
-        """Reflect the display's effective crop / swap modes without
-        recording them as operator preferences (device switches
-        recompute them: per-device memory > defaults)."""
-        self.chkCamPortrait.blockSignals(True)
-        self.chkCamPortrait.setChecked(self.display._camera_portrait)
-        self.chkCamPortrait.blockSignals(False)
-        self.chkCamSwap.blockSignals(True)
-        self.chkCamSwap.setChecked(self.display._camera_swap_aspect)
-        self.chkCamSwap.blockSignals(False)
 
     def _on_camera_toggle_clicked(self, checked: bool) -> None:
         self.display.set_camera_mode(checked)
@@ -1089,22 +1042,8 @@ class ControlWindow(QWidget):
     def _on_cam_marquee_opacity_changed(self, v: int) -> None:
         self.display.set_camera_marquee_opacity(v / 100.0)
 
-    def _on_cam_portrait_toggled(self, on: bool) -> None:
-        self.display.set_camera_portrait(on)
-        self._log_local("ADMIN",
-                        "カメラ縦型 9:16 クロップ ON" if on
-                        else "カメラ全体表示 (レターボックス)")
-
-    def _on_cam_swap_toggled(self, on: bool) -> None:
-        self.display.set_camera_swap_aspect(on)
-        self._log_local("ADMIN",
-                        "カメラ縦横補正 ON (フレームを縦横入替サイズへ伸長)"
-                        if on else "カメラ縦横補正 OFF")
-
-    def _on_cam_crop_changed(self, _v: int) -> None:
-        self.display.set_camera_crop_cx(self.spCamCropX.value() / 100.0)
-        self.display.set_camera_crop_cy(self.spCamCropY.value() / 100.0)
-        self.display.set_camera_crop_zoom(self.spCamCropZoom.value() / 100.0)
+    def _on_cam_hstretch_changed(self, v: int) -> None:
+        self.display.set_camera_hstretch(v / 100.0)
 
     # ---- piano roll (USB MIDI) controls ----
     def _build_piano_box(self) -> QWidget:

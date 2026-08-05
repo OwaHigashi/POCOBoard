@@ -103,16 +103,13 @@ def main() -> int:
     camera_device  = cfg.get_str("camera_device", "")
     camera_fx_op   = cfg.get_int("camera_fx_opacity_pct", 55)
     camera_mq_op   = cfg.get_int("camera_marquee_opacity_pct", 75)
-    # Portrait 9:16 (720x1280) crop of the camera frame — aim point + zoom.
-    camera_portrait  = cfg.get_bool("camera_portrait_crop", True)
-    camera_crop_cx   = cfg.get_int("camera_crop_cx_pct", 50)
-    camera_crop_cy   = cfg.get_int("camera_crop_cy_pct", 50)
-    camera_crop_zoom = cfg.get_int("camera_crop_zoom_pct", 100)
-    # Anamorphic corrections for portrait signal chains: camera_swap_aspect
-    # un-squeezes camera frames whose true shape is transposed;
+    # Horizontal-only stretch of the camera picture (vertical untouched,
+    # centered on the middle axis) — compensates capture chains that
+    # deliver a horizontally squeezed picture.  100 = no stretch;
+    # shipped default 168 ≈ 1280/760.
+    camera_hstretch  = cfg.get_int("camera_hstretch_pct", 168)
     # display_portrait_stretch composes the WHOLE output at 9:16 and
     # stretches it onto the 16:9 signal.
-    camera_swap      = cfg.get_bool("camera_swap_aspect", False)
     output_stretch   = cfg.get_bool("display_portrait_stretch", False)
     piano_pps     = cfg.get_int("piano_scroll_pps", 110)
     piano_fx_op   = cfg.get_int("piano_fx_opacity_pct", 55)
@@ -182,15 +179,8 @@ def main() -> int:
     display.set_video_volume(max(0, min(100, startup_ext_volume)) / 100.0)
     display.set_camera_fx_opacity(max(0, min(100, camera_fx_op)) / 100.0)
     display.set_camera_marquee_opacity(max(0, min(100, camera_mq_op)) / 100.0)
-    # Config default applies to physical (Qt/MF) cameras; virtual cameras
-    # (ManyCam / OBS via the DirectShow backend) default to full-frame —
-    # their picture is already composed, cropping it would slice the sides.
-    display.set_camera_portrait_default(camera_portrait)
-    display.set_camera_swap_default(camera_swap)
+    display.set_camera_hstretch(max(50, min(400, camera_hstretch)) / 100.0)
     display.set_output_stretch(output_stretch)
-    display.set_camera_crop_cx(max(0, min(100, camera_crop_cx)) / 100.0)
-    display.set_camera_crop_cy(max(0, min(100, camera_crop_cy)) / 100.0)
-    display.set_camera_crop_zoom(max(100, min(800, camera_crop_zoom)) / 100.0)
     if camera_device:
         display.set_camera_device(camera_device)
     display.set_camera_mode(camera_on_boot)

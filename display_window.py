@@ -195,35 +195,14 @@ class DisplayWindow(QWidget):
         self._dshow_poll_accum: float = 0.0
         self._camera_fx_opacity:      float = 0.55
         self._camera_marquee_opacity: float = 0.75
-        # Portrait (9:16 = 720x1280) crop of the camera frame.  A typical
-        # USB camera delivers landscape frames of a smartphone-style
-        # subject; we cut a 9:16 window out of the source and map it onto
-        # a 720x1280-proportioned rect fitted to the display.  Source and
-        # destination rects share the exact same aspect, so X and Y scale
-        # identically — the picture is never stretched.
-        self._camera_portrait:  bool  = True
-        self._camera_crop_cx:   float = 0.5   # crop-center X, fraction of frame width
-        self._camera_crop_cy:   float = 0.5   # crop-center Y, fraction of frame height
-        self._camera_crop_zoom: float = 1.0   # 1.0 = largest 9:16 crop that fits
-        # Portrait-crop policy.  The 9:16 crop exists to cut a phone-
-        # shaped region out of a RAW camera frame — but virtual cameras
-        # (ManyCam / OBS, i.e. the dshow backend) deliver an already-
-        # composed picture, and cropping that slices off its sides.  So:
-        # explicit per-device operator choice > backend default
-        # (qt/physical → config default, dshow/virtual → full frame).
-        self._camera_portrait_default: bool = True
-        self._camera_crop_pref: dict[str, bool] = {}
-        # Aspect-swap correction.  Some capture boards deliver a portrait
-        # screen (true shape 1080x1920) anamorphically squeezed into a
-        # landscape 1920x1080 frame — displayed as-is it looks squashed.
-        # When enabled, incoming frames are restretched to HxW (the
-        # transposed size) at ingest, undoing the squeeze; everything
-        # downstream (crop / letterbox / caches) then sees a真の portrait
-        # frame.  Same preference model as the crop: per-device operator
-        # choice > config default.
-        self._camera_swap_aspect:  bool = False
-        self._camera_swap_default: bool = False
-        self._camera_swap_pref: dict[str, bool] = {}
+        # Horizontal-only stretch of the camera picture.  The operator's
+        # capture chain delivers a horizontally squeezed picture; the fix
+        # they want is literal: keep the vertical size, stretch the
+        # picture horizontally by an adjustable factor about the window's
+        # center axis (parts pushed past the edges are simply clipped).
+        # 1.0 = no stretch.  Default set from config (camera_hstretch_pct,
+        # shipped default 1280/760 ≈ 168 %).
+        self._camera_hstretch: float = 1280.0 / 760.0
 
         # --- whole-output portrait stretch ---
         # For signal chains where the DISPLAY side is really portrait
@@ -441,94 +420,21 @@ class DisplayWindow(QWidget):
         self._camera_marquee_opacity = max(0.0, min(1.0, float(opacity)))
         self._dirty = True
 
-    @Slot(bool)
-    def set_camera_portrait(self, on: bool) -> None:
-        """Toggle the 9:16 portrait crop (True) vs full-frame letterbox.
+    @Slot(float)
+    def set_camera_hstretch(self, factor: float) -> None:
+        """Horizontal-only stretch factor for the camera picture.
 
-        Called from the operator UI — the choice is remembered for the
-        currently selected device and restored when switching back."""
-        self._camera_portrait = bool(on)
-        ident = self.current_camera_id()
-        if ident:
-            self._camera_crop_pref[ident] = self._camera_portrait
-        self._dirty = True
-
-    @Slot(bool)
-    def set_camera_portrait_default(self, on: bool) -> None:
-        """Boot-config default for the 9:16 crop.  Applies to physical
-        (Qt/MF) cameras; virtual cameras (dshow backend) default to
-        full-frame regardless, unless the operator overrides."""
-        self._camera_portrait_default = bool(on)
-        self._apply_camera_crop_pref()
-
-    @Slot(bool)
-    def set_camera_swap_aspect(self, on: bool) -> None:
-        """Toggle the anamorphic un-squeeze for the current camera:
-        incoming frames are restretched to their transposed size (a
-        1920x1080-tagged frame becomes 1080x1920), undoing capture
-        boards that squeeze a portrait screen into a landscape frame.
-        Remembered per device like the crop choice."""
-        self._camera_swap_aspect = bool(on)
-        ident = self.current_camera_id()
-        if ident:
-            self._camera_swap_pref[ident] = self._camera_swap_aspect
-        self._dirty = True
-
-    @Slot(bool)
-    def set_camera_swap_default(self, on: bool) -> None:
-        """Boot-config default for the aspect-swap correction."""
-        self._camera_swap_default = bool(on)
-        self._apply_camera_crop_pref()
-
-    def _apply_camera_crop_pref(self) -> None:
-        """Recompute the effective crop + swap modes for the current
-        device (operator per-device memory > defaults)."""
-        ident = self.current_camera_id()
-        if ident and ident in self._camera_crop_pref:
-            self._camera_portrait = self._camera_crop_pref[ident]
-        elif self._camera_backend == "dshow":
-            # ManyCam / OBS compose their picture themselves — cropping
-            # it again slices off the sides.  Show it whole.
-            self._camera_portrait = False
-        else:
-            self._camera_portrait = self._camera_portrait_default
-        if ident and ident in self._camera_swap_pref:
-            self._camera_swap_aspect = self._camera_swap_pref[ident]
-        else:
-            self._camera_swap_aspect = self._camera_swap_default
+        1.0 = undistorted letterbox; larger values widen the picture
+        about the center axis while the vertical size stays put.
+        Overflow past the window edges is clipped."""
+        self._camera_hstretch = max(0.5, min(4.0, float(factor)))
         self._dirty = True
 
     def _ingest_camera_frame(self, img: QImage) -> None:
-        """Common ingest for both camera backends: optional anamorphic
-        un-squeeze, then publish for the next paint."""
-        if self._camera_swap_aspect and img.width() > 1 and img.height() > 1:
-            # Restretch to the transposed size — X and Y scale by
-            # different factors on purpose; that is what undoes the
-            # capture board's squeeze.
-            img = img.scaled(img.height(), img.width(),
-                             Qt.AspectRatioMode.IgnoreAspectRatio,
-                             Qt.TransformationMode.FastTransformation)
+        """Common ingest for both camera backends: publish the frame for
+        the next paint."""
         self._latest_camera_image = img
         self._frame_dirty = True
-
-    @Slot(float)
-    def set_camera_crop_cx(self, frac: float) -> None:
-        """Crop-window center X as a fraction (0.0..1.0) of frame width."""
-        self._camera_crop_cx = max(0.0, min(1.0, float(frac)))
-        self._dirty = True
-
-    @Slot(float)
-    def set_camera_crop_cy(self, frac: float) -> None:
-        """Crop-window center Y as a fraction (0.0..1.0) of frame height."""
-        self._camera_crop_cy = max(0.0, min(1.0, float(frac)))
-        self._dirty = True
-
-    @Slot(float)
-    def set_camera_crop_zoom(self, zoom: float) -> None:
-        """Crop magnification: 1.0 = the largest 9:16 window that fits the
-        source frame; 2.0 = half that window (2x magnified), etc."""
-        self._camera_crop_zoom = max(1.0, min(8.0, float(zoom)))
-        self._dirty = True
 
     @Slot(bool)
     def set_camera_mode(self, on: bool) -> None:
@@ -568,7 +474,6 @@ class DisplayWindow(QWidget):
             self._dshow_ident = dev_ident
             self._dshow_desc = desc
             self._camera_device = None
-        self._apply_camera_crop_pref()
         if self._camera_mode:
             self._start_camera()
         return True
@@ -621,7 +526,6 @@ class DisplayWindow(QWidget):
                 self._camera_backend = "dshow"
                 self._dshow_ident = dev_ident
                 self._dshow_desc = desc
-                self._apply_camera_crop_pref()
                 self._start_camera_dshow()
                 return
             dev = self._qt_device_by_id(dev_ident)
@@ -629,7 +533,6 @@ class DisplayWindow(QWidget):
                 print("[camera] no capture devices available")
                 return
             self._camera_device = dev
-            self._apply_camera_crop_pref()
         try:
             self._camera_sink = QVideoSink(self)
             self._camera_sink.videoFrameChanged.connect(self._on_camera_frame)
@@ -1204,38 +1107,38 @@ class DisplayWindow(QWidget):
         img = self._latest_camera_image
         if img is None or img.isNull():
             return
-        if not self._camera_portrait:
-            if self._output_stretch:
-                # Portrait-output mode: the camera signal comes from the
-                # same anamorphic chain as our output, so pass it through
-                # FULL-BLEED — fill the virtual canvas, no letterbox.
-                # The downstream squeeze restores its true proportions.
-                # (Letterboxing here shrank the picture into a thin band
-                # — the "更に細くなる" bug.)
-                p.drawPixmap(0, 0, self._cached_frame_pixmap(img, None, w, h))
-                return
-            self._draw_letterboxed(p, w, h, img)
+        if self._output_stretch:
+            # Portrait-output mode: the camera signal comes from the
+            # same anamorphic chain as our output, so pass it through
+            # FULL-BLEED — fill the virtual canvas, no letterbox.
+            # The downstream squeeze restores its true proportions.
+            # (Letterboxing here shrank the picture into a thin band
+            # — the "更に細くなる" bug.)
+            p.drawPixmap(0, 0, self._cached_frame_pixmap(img, None, w, h))
             return
         iw, ih = img.width(), img.height()
         if iw <= 0 or ih <= 0:
             return
-        # Source: the largest 9:16 window that fits inside the frame,
-        # shrunk by the zoom factor, centered on the aim point (clamped so
-        # the window never leaves the frame).
-        crop_h = min(float(ih), iw * 16.0 / 9.0) / self._camera_crop_zoom
-        crop_w = crop_h * 9.0 / 16.0
-        sx = min(max(self._camera_crop_cx * iw - crop_w / 2.0, 0.0), iw - crop_w)
-        sy = min(max(self._camera_crop_cy * ih - crop_h / 2.0, 0.0), ih - crop_h)
-        # Destination: a 720x1280-proportioned portrait rect fitted to the
-        # window and centered.  Same 9:16 aspect as the source rect, so
-        # the scale factor is identical for X and Y (no stretch).
-        scale = min(w / 720.0, h / 1280.0)
-        dw = max(1, int(720.0 * scale))
-        dh = max(1, int(1280.0 * scale))
+        # Letterbox fit, then stretch ONLY the width by the operator's
+        # factor about the window's center axis.  The vertical size is
+        # untouched; whatever the widening pushes past the window edges
+        # is clipped away.
+        scale = min(w / iw, h / ih)
+        dw = max(1, int(iw * scale * self._camera_hstretch))
+        dh = max(1, int(ih * scale))
+        dy = (h - dh) // 2
+        if dw <= w:
+            p.drawPixmap((w - dw) // 2,
+                         dy, self._cached_frame_pixmap(img, None, dw, dh))
+            return
+        # Wider than the window: only the central w/dw fraction of the
+        # frame is visible — crop that from the source and scale it once
+        # to exactly window width instead of rendering offscreen pixels.
+        src_w = iw * w / dw
+        sx = (iw - src_w) / 2.0
         pm = self._cached_frame_pixmap(
-            img, (int(sx), int(sy), max(1, int(crop_w)), max(1, int(crop_h))),
-            dw, dh)
-        p.drawPixmap((w - dw) // 2, (h - dh) // 2, pm)
+            img, (int(sx), 0, max(1, int(src_w)), ih), w, dh)
+        p.drawPixmap(0, dy, pm)
 
     def _draw_letterboxed(self, p: QPainter, w: int, h: int,
                           img: Optional[QImage]) -> None:
