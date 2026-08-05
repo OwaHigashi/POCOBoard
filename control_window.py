@@ -960,8 +960,8 @@ class ControlWindow(QWidget):
             int(round(self.display._camera_hstretch * 100)))
         self.spCamHStretch.setToolTip(
             "カメラ映像を縦はそのまま、横方向だけ中央軸を基準に引き延ばします。\n"
-            "100 % = 引き延ばしなし / 290 % = 既定（実機で校正。圧縮が入口と\n"
-            "出口で二重にかかるため、一段分 ≈1.7 倍の二乗）。\n"
+            "100 % = 引き延ばしなし / 285 % = 既定（実機で校正。圧縮が入口と\n"
+            "出口で二重にかかるため、一段分 ≈1.69 倍の二乗）。\n"
             "画面からはみ出した左右はそのまま切れます。")
         self.spCamHStretch.valueChanged.connect(self._on_cam_hstretch_changed)
         st_row.addWidget(self.spCamHStretch)

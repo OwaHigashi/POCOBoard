@@ -201,9 +201,10 @@ class DisplayWindow(QWidget):
         # picture horizontally by an adjustable factor about the window's
         # center axis (parts pushed past the edges are simply clipped).
         # 1.0 = no stretch.  Default set from config (camera_hstretch_pct,
-        # shipped default 290 % — calibrated on the operator's rig; the
-        # ideal-chain theory value is (16/9)^2 ~= 316 %, see README).
-        self._camera_hstretch: float = 2.9
+        # shipped default 285 % — calibrated on the operator's rig; equals
+        # the single-stage squeeze squared (1.688^2), the ideal-chain
+        # theory value being (16/9)^2 ~= 316 %, see README).
+        self._camera_hstretch: float = 2.85
 
         # --- whole-output portrait stretch ---
         # For signal chains where the DISPLAY side is really portrait

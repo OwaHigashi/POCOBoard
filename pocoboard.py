@@ -106,8 +106,8 @@ def main() -> int:
     # Horizontal-only stretch of the camera picture (vertical untouched,
     # centered on the middle axis) — compensates capture chains that
     # deliver a horizontally squeezed picture.  100 = no stretch;
-    # shipped default 290 (calibrated on the deploy rig).
-    camera_hstretch  = cfg.get_int("camera_hstretch_pct", 290)
+    # shipped default 285 (calibrated on the deploy rig).
+    camera_hstretch  = cfg.get_int("camera_hstretch_pct", 285)
     # display_portrait_stretch composes the WHOLE output at 9:16 and
     # stretches it onto the 16:9 signal.
     output_stretch   = cfg.get_bool("display_portrait_stretch", False)

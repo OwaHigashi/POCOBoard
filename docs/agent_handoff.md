@@ -1264,7 +1264,7 @@ now the shipped default.
 ## hstretch default recalibrated to 290 % (2026-08-05, rig-verified)
 
 The operator tuned the spinbox on the real rig: 「290%ぐらいで丁度」.
-Shipped default updated 168 → 290 everywhere (display_window state,
+Shipped default updated 168 → 285 everywhere (operator first said ~290, then settled on 285 = 1.688², confirming the squared-single-stage model) (display_window state,
 pocoboard config default, config.example.ini, README, tooltip).
 
 Why 290: the horizontal squeeze is applied TWICE in this chain — once
