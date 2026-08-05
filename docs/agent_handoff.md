@@ -1277,3 +1277,51 @@ would give (16/9)² ≈ 3.16 (316 %); the gap to 290 suggests one stage
 isn't a full-frame map (underscan, or source not exactly 16:9) — if
 the picture ever drifts, try 316 as the "pure theory" anchor.
 Offscreen test updated for the new default; all green.
+
+## Output horizontal correction for drawn layers (2026-08-05, later)
+
+Rig feedback after the camera fix: FX (BOMB / LEAVES 等) still come out
+縦長 on the final display, and the piano roll should have 全鍵盤が横に
+並ぶ.  Root insight: the camera needs the squeeze correction SQUARED
+(285 % — it is squeezed at ingest AND at output), but layers POCOBoard
+draws itself only pass the OUTPUT squeeze once → they need the single
+stage, sqrt(2.85) ≈ 1.69.
+
+### Implementation (replaces 縦型出力補正 entirely)
+
+- `display_window.py`: `_output_stretch` (transposed-canvas bool) is
+  GONE, replaced by `_output_hstretch: float` (default sqrt(2.85)).
+  `_virtual_size()` now returns `(round(w / factor), h)` — vertical
+  untouched.  paintEvent has two coordinate spaces: the CAMERA layer
+  and background fills draw in PHYSICAL coords (camera keeps its own
+  285 % correction and must NOT compound with this one); FX, marquee,
+  piano roll, photos, videos, idle title draw inside `_vpush()` /
+  `_vpop()` which wrap them in `p.scale(pw / vw, 1.0)` — composed
+  narrow, stretched to full width, nothing clipped.  The piano scene
+  lays out its 88 keys across the virtual width, so the full keyboard
+  spans the final screen.  `set_output_hstretch(factor)` (clamp
+  1.0..4.0) clears in-flight marquee tracks AND the running FX scene
+  (both were laid out against the old canvas), resizes the piano
+  scene.
+- `control_window.py`: the 縦型出力補正 checkbox is replaced by a
+  「演出の横補正 (効果・文字・ピアノ)」 spinbox (100..400 %, default
+  169) in 表示 tab row 4.  QCheckBox import dropped.
+- `pocoboard.py` / `config.example.ini` / `README.md`: config key
+  `display_portrait_stretch` (bool) replaced by `output_hstretch_pct`
+  (int, default 169, clamp 100..400).
+- Theory note recorded in README: 169 = sqrt(285).  If the operator
+  ever recalibrates the camera to K %, the drawn-layer value should
+  track sqrt(K) — they are two views of the same single-stage squeeze.
+
+### Verification
+
+- Offscreen test extended: camera letterbox is pixel-identical with
+  output hstretch 2.0 vs 1.0 (camera not double-corrected); piano-roll
+  keyboard spans the full physical width under the transform (bright
+  keys at x=20 / 800 / 1580, dark roll above); CHEER + marquee render
+  under the transform without exception; default asserts sqrt(2.85).
+  ALL OK, plus all earlier camera-hstretch checks still green.
+- Live offscreen boot green (camera auto-start, UI builds).
+- NOT verified on the rig: that 169 % makes BOMB circles round and
+  the keyboard fill the final screen — if slightly off, tune the
+  spinbox; the "pure theory" anchor is sqrt(316) ≈ 178 %.

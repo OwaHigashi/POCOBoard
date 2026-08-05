@@ -13,7 +13,7 @@ import socket
 from PySide6.QtCore    import Qt, QTimer, Signal, Slot
 from PySide6.QtGui     import QFont, QGuiApplication
 from PySide6.QtWidgets import (
-    QApplication, QAbstractScrollArea, QCheckBox, QComboBox, QFileDialog,
+    QApplication, QAbstractScrollArea, QComboBox, QFileDialog,
     QFrame, QGridLayout, QGroupBox, QHBoxLayout, QLabel, QPushButton,
     QScrollArea, QSlider, QSpinBox, QTabWidget, QTextEdit, QVBoxLayout, QWidget,
 )
@@ -837,21 +837,32 @@ class ControlWindow(QWidget):
         self.spImageSec.valueChanged.connect(self._on_image_sec_changed)
         dl.addWidget(self.spImageSec, 3, 1, 1, 2)
 
-        # Whole-output portrait stretch: compose everything at 9:16 and
-        # stretch onto the 16:9 signal (for physically-portrait outputs
-        # driven with a landscape signal).
-        self.chkOutputStretch = QCheckBox(
-            "縦型出力補正 — 画面全体を 9:16 (1080x1920) で構成し、"
-            "16:9 (1920x1080) に引き延ばして出力")
-        self.chkOutputStretch.setChecked(self.display.is_output_stretch())
-        self.chkOutputStretch.setToolTip(
-            "出力先が実際には縦型 (1080x1920) なのに 1920x1080 の信号で駆動される\n"
-            "構成向け。カメラ・写真・動画・エフェクト・飛ぶ文字・ピアノロールの\n"
-            "すべてを縦比率で構成してから横に引き延ばすので、出力チェーンで\n"
-            "圧縮され直すと正しい比率に戻ります。切替時、流れている文字は\n"
-            "一旦クリアされます。")
-        self.chkOutputStretch.toggled.connect(self._on_output_stretch_toggled)
-        dl.addWidget(self.chkOutputStretch, 4, 0, 1, 3)
+        # Output horizontal correction for the drawn layers (FX / marquee
+        # / piano roll / photos / videos): compose on a narrower virtual
+        # canvas and stretch to full width, so the downstream squeeze
+        # restores true proportions.  The camera has its own (squared)
+        # correction in the camera box below.
+        out_row = QHBoxLayout()
+        out_row.setSpacing(8)
+        out_row.addWidget(QLabel("演出の横補正 (効果・文字・ピアノ):"))
+        self.spOutputHStretch = QSpinBox()
+        self.spOutputHStretch.setRange(100, 400)
+        self.spOutputHStretch.setSingleStep(2)
+        self.spOutputHStretch.setSuffix(" %")
+        self.spOutputHStretch.setMinimumHeight(30)
+        self.spOutputHStretch.setValue(
+            int(round(self.display._output_hstretch * 100)))
+        self.spOutputHStretch.setToolTip(
+            "エフェクト・飛ぶ文字・ピアノロール・写真・動画を横に狭い仮想画面で\n"
+            "構成してから横一杯に引き延ばして出力します。出力チェーンの圧縮で\n"
+            "正しい比率に戻り、ピアノロールは全 88 鍵が最終画面の横幅に並びます。\n"
+            "100 % = 補正なし / 169 % = 既定（カメラの横引き延ばし 285 % の\n"
+            "平方根 — 圧縮一段分）。変更時、流れている文字と実行中の効果は\n"
+            "一旦クリアされます。カメラ映像は上のカメラ欄で別途補正します。")
+        self.spOutputHStretch.valueChanged.connect(self._on_output_hstretch_changed)
+        out_row.addWidget(self.spOutputHStretch)
+        out_row.addStretch(1)
+        dl.addLayout(out_row, 4, 0, 1, 3)
 
         hint = QLabel(
             "※ リモートからアップロードされた画像/動画/音声は自動で背景になります。"
@@ -873,11 +884,9 @@ class ControlWindow(QWidget):
         dl.setRowStretch(8, 1)
         return w
 
-    def _on_output_stretch_toggled(self, on: bool) -> None:
-        self.display.set_output_stretch(on)
-        self._log_local("ADMIN",
-                        "縦型出力補正 ON (全描画を 9:16 構成 → 16:9 伸長出力)"
-                        if on else "縦型出力補正 OFF")
+    def _on_output_hstretch_changed(self, v: int) -> None:
+        self.display.set_output_hstretch(v / 100.0)
+        self._log_local("ADMIN", f"演出の横補正 {v} %")
 
     # ---- live camera (USB / virtual camera) controls ----
     def _build_camera_box(self) -> QWidget:

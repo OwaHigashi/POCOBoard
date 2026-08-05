@@ -13,6 +13,7 @@ All state-change entry points are Qt slots, so they can be called from
 signals fired on any thread.
 """
 from __future__ import annotations
+import math
 import os
 import time
 from typing import Optional
@@ -206,16 +207,24 @@ class DisplayWindow(QWidget):
         # theory value being (16/9)^2 ~= 316 %, see README).
         self._camera_hstretch: float = 2.85
 
-        # --- whole-output portrait stretch ---
-        # For signal chains where the DISPLAY side is really portrait
-        # (e.g. 1080x1920) but is driven with a landscape 1920x1080
-        # signal: compose EVERY layer (camera / image / video / FX /
-        # marquee / piano roll / idle title) on a transposed virtual
-        # canvas (h x w) and anamorphically stretch the finished frame
-        # onto the physical window.  The downstream squeeze then restores
-        # true proportions.  Implemented as a painter scale transform in
-        # paintEvent — no offscreen buffer needed.
-        self._output_stretch: bool = False
+        # --- output horizontal correction for the DRAWN layers ---
+        # The output signal goes through ONE downstream horizontal
+        # squeeze (landscape signal crammed onto the portrait panel), so
+        # everything POCOBoard draws itself — FX scenes, marquee text,
+        # piano roll, uploaded photos / videos, idle title — must be
+        # pre-stretched by ONE squeeze stage to look right on the final
+        # display.  (The camera picture is different: it arrives already
+        # squeezed once by the capture board, so it needs the squeeze
+        # SQUARED — that is the separate _camera_hstretch above, default
+        # 2.85 = 1.688^2.)
+        # Implementation: those layers compose on a NARROWER virtual
+        # canvas (round(w / factor), h) and paintEvent stretches the
+        # composition horizontally to fill the physical window — nothing
+        # is clipped, the vertical size is untouched, and e.g. the piano
+        # keyboard lays out all 88 keys across the virtual width so the
+        # full keyboard spans the final screen.  1.0 = off.  Config
+        # output_hstretch_pct, shipped default 169 ≈ sqrt(2.85).
+        self._output_hstretch: float = math.sqrt(2.85)
 
     # ---------- activity tracking ----------
     def _mark_activity(self) -> None:
@@ -234,37 +243,38 @@ class DisplayWindow(QWidget):
         'someone is using this' so the title shouldn't reappear mid-chat."""
         self._mark_activity()
 
-    # ---------- virtual canvas (output-stretch aware) ----------
+    # ---------- virtual canvas (output-hstretch aware) ----------
     def _virtual_size(self) -> tuple[int, int]:
-        """Logical composition size.  Equal to the window size normally;
-        transposed (h, w) when the portrait output stretch is active —
-        every layer is laid out against THIS size and paintEvent
-        stretches the finished composition onto the physical window."""
+        """Logical composition size for the layers POCOBoard draws
+        itself (FX / marquee / piano / photos / videos / idle title).
+        Horizontally shrunk by the output correction factor; paintEvent
+        stretches the composition back to the full window width so the
+        downstream squeeze restores true proportions.  The camera layer
+        does NOT use this — it draws in physical coordinates with its
+        own (squared) correction."""
         w = max(1, self.width())
         h = max(1, self.height())
-        if self._output_stretch:
-            return h, w
+        if self._output_hstretch > 1.001:
+            return max(1, int(round(w / self._output_hstretch))), h
         return w, h
 
-    @Slot(bool)
-    def set_output_stretch(self, on: bool) -> None:
-        """Compose the whole screen at transposed (portrait) proportions
-        and stretch the result onto the landscape output signal."""
-        on = bool(on)
-        if on == self._output_stretch:
+    @Slot(float)
+    def set_output_hstretch(self, factor: float) -> None:
+        """Horizontal pre-stretch for the drawn layers (1.0 = off)."""
+        factor = max(1.0, min(4.0, float(factor)))
+        if abs(factor - self._output_hstretch) < 1e-6:
             return
-        self._output_stretch = on
+        self._output_hstretch = factor
         vw, vh = self._virtual_size()
-        # In-flight marquee tracks were laid out against the old canvas
-        # geometry — clear them (same policy as marquee size changes).
+        # In-flight marquee tracks and a running FX scene were laid out
+        # against the old canvas geometry — clear them (same policy as
+        # marquee size changes); the piano scene can simply re-layout.
         self._marquee.stop_all()
         self._emit_marquee_status()
+        self._scene = None
         if self._piano_scene is not None:
             self._piano_scene.resize(vw, vh)
         self._dirty = True
-
-    def is_output_stretch(self) -> bool:
-        return self._output_stretch
 
     # ---------- public slots (called from any thread via QueuedConnection) ----------
     @Slot(str)
@@ -998,13 +1008,28 @@ class DisplayWindow(QWidget):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         p.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
-        # Compose against the virtual canvas.  With the portrait output
-        # stretch active the canvas is transposed (h x w) and a painter
-        # scale maps it anamorphically onto the physical window — every
-        # layer below is stretch-agnostic; it just draws into (w, h).
+        # Two coordinate spaces:
+        #  - PHYSICAL (pw, ph): the camera layer and background fills —
+        #    the camera applies its own (squared) horizontal correction.
+        #  - VIRTUAL (w, h): everything POCOBoard draws itself — FX,
+        #    marquee, piano roll, photos, videos, idle title — composes
+        #    on the horizontally-shrunk virtual canvas and is stretched
+        #    to full width by _vpush/_vpop, so the downstream squeeze
+        #    restores true proportions (BOMB circles stay round, the
+        #    piano keyboard spans the whole final screen).
+        pw = max(1, self.width())
+        ph = max(1, self.height())
         w, h = self._virtual_size()
-        if self._output_stretch:
-            p.scale(self.width() / w, self.height() / h)
+        _stretched = w != pw
+
+        def _vpush() -> None:
+            if _stretched:
+                p.save()
+                p.scale(pw / w, 1.0)
+
+        def _vpop() -> None:
+            if _stretched:
+                p.restore()
 
         # Layer order (back → front).  Piano mode adds a piano-roll BASE
         # underneath everything; the visual slots (image / video) and
@@ -1046,39 +1071,55 @@ class DisplayWindow(QWidget):
                                 and self._latest_camera_image is not None
                                 and not self._latest_camera_image.isNull())
             if has_camera_frame:
-                p.fillRect(0, 0, w, h, Qt.GlobalColor.black)
-                self._draw_camera_frame(p, w, h)
+                p.fillRect(0, 0, pw, ph, Qt.GlobalColor.black)
+                self._draw_camera_frame(p, pw, ph)
+                _vpush()
                 p.setOpacity(self._piano_roll_opacity)
                 self._piano_scene.draw(p, w, h)
                 p.setOpacity(1.0)
+                _vpop()
             else:
+                p.fillRect(0, 0, pw, ph, Qt.GlobalColor.black)
+                _vpush()
                 self._piano_scene.draw(p, w, h)
+                _vpop()
             # Visual-slot overlays (image / video) on top, translucent.
             if has_video:
+                _vpush()
                 p.setOpacity(self._piano_video_opacity)
                 self._draw_video_frame(p, w, h)
                 p.setOpacity(1.0)
+                _vpop()
             if has_image:
+                _vpush()
                 p.setOpacity(self._piano_image_opacity)
                 self._draw_bg_image(p, w, h)
                 p.setOpacity(1.0)
+                _vpop()
         elif has_video:
             # Non-piano mode: video frame fills the screen as background.
-            p.fillRect(0, 0, w, h, Qt.GlobalColor.black)
+            p.fillRect(0, 0, pw, ph, Qt.GlobalColor.black)
+            _vpush()
             self._draw_video_frame(p, w, h)
+            _vpop()
         elif has_image:
-            p.fillRect(0, 0, w, h, Qt.GlobalColor.black)
+            p.fillRect(0, 0, pw, ph, Qt.GlobalColor.black)
+            _vpush()
             self._draw_bg_image(p, w, h)
+            _vpop()
         elif camera_visible:
-            p.fillRect(0, 0, w, h, Qt.GlobalColor.black)
-            self._draw_camera_frame(p, w, h)
+            p.fillRect(0, 0, pw, ph, Qt.GlobalColor.black)
+            self._draw_camera_frame(p, pw, ph)
         elif self._show_idle_title and self._scene is None:
-            p.fillRect(0, 0, w, h, QColor(8, 10, 16))
+            p.fillRect(0, 0, pw, ph, QColor(8, 10, 16))
+            _vpush()
             self._draw_idle(p, w, h, alpha=self._title_fade)
+            _vpop()
         else:
-            p.fillRect(0, 0, w, h, Qt.GlobalColor.black)
+            p.fillRect(0, 0, pw, ph, Qt.GlobalColor.black)
 
         if self._scene is not None and self._scene.alive:
+            _vpush()
             if self._piano_mode:
                 p.setOpacity(self._piano_fx_opacity)
                 self._scene.draw(p, w, h)
@@ -1093,30 +1134,29 @@ class DisplayWindow(QWidget):
                 p.setOpacity(1.0)
             else:
                 self._scene.draw(p, w, h)
+            _vpop()
 
         if self._marquee.tracks:
+            _vpush()
             if camera_visible:
                 p.setOpacity(self._camera_marquee_opacity)
                 self._marquee.draw(p, QRectF(0, 0, w, h))
                 p.setOpacity(1.0)
             else:
                 self._marquee.draw(p, QRectF(0, 0, w, h))
+            _vpop()
 
     def _draw_video_frame(self, p: QPainter, w: int, h: int) -> None:
         self._draw_letterboxed(p, w, h, self._latest_video_image)
 
     def _draw_camera_frame(self, p: QPainter, w: int, h: int) -> None:
+        """Camera layer.  Draws in PHYSICAL window coordinates — the
+        camera picture arrives pre-squeezed by the capture board, so its
+        own _camera_hstretch (squeeze squared) is the complete
+        correction; it must NOT additionally pass through the virtual
+        canvas used by the drawn layers."""
         img = self._latest_camera_image
         if img is None or img.isNull():
-            return
-        if self._output_stretch:
-            # Portrait-output mode: the camera signal comes from the
-            # same anamorphic chain as our output, so pass it through
-            # FULL-BLEED — fill the virtual canvas, no letterbox.
-            # The downstream squeeze restores its true proportions.
-            # (Letterboxing here shrank the picture into a thin band
-            # — the "更に細くなる" bug.)
-            p.drawPixmap(0, 0, self._cached_frame_pixmap(img, None, w, h))
             return
         iw, ih = img.width(), img.height()
         if iw <= 0 or ih <= 0:

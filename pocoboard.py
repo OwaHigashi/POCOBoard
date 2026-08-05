@@ -108,9 +108,11 @@ def main() -> int:
     # deliver a horizontally squeezed picture.  100 = no stretch;
     # shipped default 285 (calibrated on the deploy rig).
     camera_hstretch  = cfg.get_int("camera_hstretch_pct", 285)
-    # display_portrait_stretch composes the WHOLE output at 9:16 and
-    # stretches it onto the 16:9 signal.
-    output_stretch   = cfg.get_bool("display_portrait_stretch", False)
+    # Output horizontal correction for the layers POCOBoard draws itself
+    # (FX / marquee / piano roll / photos / videos): ONE squeeze stage,
+    # i.e. the square root of the camera's double-squeeze correction.
+    # 100 = off; shipped default 169 ≈ sqrt(285 %).
+    output_hstretch  = cfg.get_int("output_hstretch_pct", 169)
     piano_pps     = cfg.get_int("piano_scroll_pps", 110)
     piano_fx_op   = cfg.get_int("piano_fx_opacity_pct", 55)
     piano_roll_op = cfg.get_int("piano_roll_opacity_pct", 65)
@@ -180,7 +182,7 @@ def main() -> int:
     display.set_camera_fx_opacity(max(0, min(100, camera_fx_op)) / 100.0)
     display.set_camera_marquee_opacity(max(0, min(100, camera_mq_op)) / 100.0)
     display.set_camera_hstretch(max(50, min(400, camera_hstretch)) / 100.0)
-    display.set_output_stretch(output_stretch)
+    display.set_output_hstretch(max(100, min(400, output_hstretch)) / 100.0)
     if camera_device:
         display.set_camera_device(camera_device)
     display.set_camera_mode(camera_on_boot)
