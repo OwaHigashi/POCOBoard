@@ -608,12 +608,14 @@ function updateIdLabel() {
 }
 
 // Wrap fetch: attach X-Poco-Name header + credentials for cookie round-trip.
+// HTTP headers only allow ISO-8859-1, so non-ASCII names (Japanese etc.)
+// must be percent-encoded here and unquoted server-side.
 const _fetch = window.fetch;
 window.fetch = function(url, opts) {
   opts = opts || {};
   opts.credentials = opts.credentials || 'same-origin';
   const hdrs = new Headers(opts.headers || {});
-  if (myName) hdrs.set('X-Poco-Name', myName);
+  if (myName) hdrs.set('X-Poco-Name', encodeURIComponent(myName));
   opts.headers = hdrs;
   return _fetch(url, opts);
 };
@@ -1053,7 +1055,7 @@ async function handleUpload(inputEl, kind) {
       const q = new URLSearchParams({ type: kind, filename: f.name });
       xhr.open('POST', api('upload?' + q), true);
       xhr.withCredentials = true;
-      if (myName) xhr.setRequestHeader('X-Poco-Name', myName);
+      if (myName) xhr.setRequestHeader('X-Poco-Name', encodeURIComponent(myName));
       xhr.setRequestHeader('Content-Type', f.type || 'application/octet-stream');
       xhr.upload.onprogress = (e) => {
         if (e.lengthComputable) {

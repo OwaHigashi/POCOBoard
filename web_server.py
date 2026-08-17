@@ -29,7 +29,7 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing      import Optional
-from urllib.parse import urlparse, parse_qs, unquote
+from urllib.parse import urlparse, parse_qs, quote, unquote
 
 from PySide6.QtCore import QObject, QTimer, Signal
 
@@ -345,7 +345,9 @@ class _Handler(BaseHTTPRequestHandler):
         if not cid or len(cid) < 8:
             cid = secrets.token_hex(8)
             new_cookie = cid
-        hdr_name = self.headers.get("X-Poco-Name", "").strip()
+        # Clients percent-encode this header (HTTP headers are latin-1 only,
+        # so raw Japanese names can't travel in them).
+        hdr_name = unquote(self.headers.get("X-Poco-Name", "")).strip()
         name = hdr_name or cookies.get("poco_name", "").strip()
         if len(name) > 32:
             name = name[:32]
@@ -552,9 +554,11 @@ class _Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Type", "application/json; charset=utf-8")
             if new_cookie:
                 self._set_identity_cookie(new_cookie)
+            # Percent-encode: cookie values (like headers) must stay latin-1
+            # safe; the browser side decodeURIComponent()s it back.
             self.send_header(
                 "Set-Cookie",
-                f"poco_name={name}; Path=/; SameSite=Lax; Max-Age=31536000",
+                f"poco_name={quote(name)}; Path=/; SameSite=Lax; Max-Age=31536000",
             )
             payload = json.dumps({"ok": True, "id": cid, "name": name}).encode("utf-8")
             self.send_header("Content-Length", str(len(payload)))

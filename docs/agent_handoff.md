@@ -1429,3 +1429,44 @@ Dead ends already removed — do not resurrect: 縦型9:16クロップ,
   config key (currently hard-derived).
 - Per-device camera hstretch memory (currently global) if the
   operator ever mixes corrected + uncorrected cameras.
+
+---
+
+## Session 2026-08-18 — 非ASCII表示名で全操作不能になるバグ修正
+
+### 症状（ユーザ報告）
+
+一部の閲覧者で「画面は見えるがボタンを押しても動かない」、アップロード時に
+`✗ file.jpg: Failed to execute 'set' on 'Headers': String contains
+non ISO-8859-1 code point` 相当のエラー表示。
+
+### 原因
+
+表示名（poco_name）に日本語など非 Latin-1 文字を設定したユーザのみ発症。
+HTTP ヘッダ値は ISO-8859-1 限定なので:
+
+1. `webpage.py` の fetch ラッパが `hdrs.set('X-Poco-Name', myName)` で
+   毎回例外 → **全 fetch（FX ボタン・status ポーリング・marquee・TALK
+   開始）が失敗**。
+2. アップロードの XHR も `setRequestHeader('X-Poco-Name', myName)` で
+   同様に失敗 → `✗ <ファイル名>: ...` のエラー表示。
+3. サーバ側 `/name` の `Set-Cookie: poco_name=<生の日本語>` も
+   http.server の latin-1 エンコードで壊れる潜在バグ。
+
+### 修正（webpage.py / web_server.py）
+
+- クライアント: `X-Poco-Name` を `encodeURIComponent()` して送信
+  （fetch ラッパと upload XHR の 2 箇所）。
+- サーバ `_identity()`: ヘッダ値を `unquote()` してから使用。
+- サーバ `/name` の `Set-Cookie`: `quote(name)` で percent-encode
+  （ブラウザ側 readCookie は元々 decodeURIComponent するので整合）。
+
+Cookie 経路は元々 JS `writeCookie` が encodeURIComponent、サーバ
+`_parse_cookies` が unquote しており整合済み。ASCII 名のユーザは
+挙動不変（encodeURIComponent が no-op）。
+
+### 検証状態
+
+`py_compile` 通過のみ。実機で「日本語の表示名を設定 → FX ボタン・
+日本語ファイル名のアップロード・TALK」を要確認。ユーザは古いページを
+キャッシュしている可能性があるためリロード（Ctrl+F5）が必要。
