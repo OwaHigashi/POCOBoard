@@ -1470,3 +1470,17 @@ Cookie 経路は元々 JS `writeCookie` が encodeURIComponent、サーバ
 `py_compile` 通過のみ。実機で「日本語の表示名を設定 → FX ボタン・
 日本語ファイル名のアップロード・TALK」を要確認。ユーザは古いページを
 キャッシュしている可能性があるためリロード（Ctrl+F5）が必要。
+
+### Session close (2026-08-18)
+
+- 上記修正はコミット `b6d65f2` として main に push 済み
+  （fix: percent-encode X-Poco-Name header）。
+- 次セッション冒頭の確認事項:
+  1. 稼働機で web_server.py を再起動したか（再起動しないと直らない）。
+  2. 発症ユーザに Ctrl+F5 でのリロードを案内済みか。
+  3. 実機検証: 日本語の表示名を設定した状態で FX ボタン／
+     日本語ファイル名のアップロード／TALK が通ること。
+- 作業ツリーに未追跡の `File.jpg` あり（ユーザ報告時のスクリーン
+  ショットと思われる。リポジトリには入れていない）。
+- 前セッションからの継続項目（297% 補正まわりの実機確認等）は
+  上の「Awaiting real-rig verification」参照。
