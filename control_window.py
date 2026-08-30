@@ -258,6 +258,12 @@ QScrollArea {
     border-radius: 14px;
     background: #fbf8f4;
 }
+/* Tab bodies scroll as a whole (long 表示 tab on short monitors); the
+   wrapper must look like the plain tab pane, not a bordered list. */
+QScrollArea#tabScroll, QScrollArea#tabScroll > QWidget > QWidget {
+    border: none;
+    background: transparent;
+}
 QScrollBar:vertical {
     background: #f5f1ea;
     width: 12px;
@@ -473,7 +479,9 @@ class ControlWindow(QWidget):
         # startup — only a WM_MOVE later forced a re-layout that
         # re-exposed the bottom rows.  Use a soft minimum + sizeHint-
         # driven resize after build instead so the layout always wins.
-        self.setMinimumSize(820, 720)
+        # Since every tall tab scrolls internally the window can shrink
+        # well below the old 720 without hiding controls.
+        self.setMinimumSize(820, 560)
         self.setWindowFlag(Qt.WindowType.WindowMaximizeButtonHint, False)
 
         self._http_host = "0.0.0.0"
@@ -481,11 +489,12 @@ class ControlWindow(QWidget):
 
         self._pending_log_lines: list[tuple[str, str]] = []
         self._build_ui()
-        # Snap to whatever the layout actually needs (at least the legacy
-        # 820 x 880 footprint, so existing operators don't see a smaller
-        # window on hosts where nothing demands extra height).
+        # Legacy 820 x 880 footprint (pocoboard.py clamps it to the
+        # control screen's available area; the tabs scroll to fit).  The
+        # sizeHint no longer reflects the tab contents because the tall
+        # tabs live inside scroll areas, so only the width follows it.
         hint = self.sizeHint()
-        self.resize(max(820, hint.width()), max(880, hint.height()))
+        self.resize(max(820, hint.width()), 880)
 
         self._status_timer = QTimer(self)
         self._status_timer.setInterval(1000)
@@ -498,32 +507,54 @@ class ControlWindow(QWidget):
         root.setContentsMargins(14, 14, 14, 10)
         root.setSpacing(10)
 
+        # Always-visible strip: header, status, volume.  The FX grid used
+        # to sit here too, but the fixed area + the growing 表示 tab
+        # pushed the window past short monitors, so FX is now a tab.
         root.addLayout(self._build_header())
         root.addWidget(self._build_status())
-        root.addWidget(self._build_fx())
         root.addWidget(self._build_volume())
 
         # -------- Tabs --------
-        # Queue comes first because during a busy show it's the control the
-        # operator touches most often.
+        # FX first (it was the always-visible grid), queue right after it
+        # because during a busy show it's the control the operator
+        # touches most often.  Tabs without their own internal scroll
+        # (FX / marquee / 表示) are wrapped so a tall body scrolls as a
+        # whole instead of clipping its bottom rows; queue / users / log
+        # already scroll inside.
         self.tabs = QTabWidget()
-        self.tabs.addTab(self._build_queue_tab(),   "📥 キュー")
-        self.tabs.addTab(self._build_marquee_tab(), "📢 横スクロール")
-        self.tabs.addTab(self._build_display_tab(), "🖥 表示")
-        self.tabs.addTab(self._build_users_tab(),    "👥 ユーザー")
-        self.tabs.addTab(self._build_log_tab(),      "📜 ログ")
+        self.tabs.addTab(self._scrollable(self._build_fx_tab()),     "✨ エフェクト")
+        self.tabs.addTab(self._build_queue_tab(),                     "📥 キュー")
+        self.tabs.addTab(self._scrollable(self._build_marquee_tab()), "📢 横スクロール")
+        self.tabs.addTab(self._scrollable(self._build_display_tab()), "🖥 表示")
+        self.tabs.addTab(self._build_users_tab(),                     "👥 ユーザー")
+        self.tabs.addTab(self._build_log_tab(),                       "📜 ログ")
+        self.QUEUE_TAB_INDEX = 1
         # Clear the attention color once the operator actually looks at the queue.
         self.tabs.currentChanged.connect(self._on_tab_changed)
         root.addWidget(self.tabs, stretch=1)
         self._refresh_queue()
 
+    @staticmethod
+    def _scrollable(body: QWidget) -> QScrollArea:
+        """Wrap a tab body in a vertical-only scroll area."""
+        sa = QScrollArea()
+        sa.setObjectName("tabScroll")
+        sa.setWidgetResizable(True)
+        sa.setFrameShape(QFrame.Shape.NoFrame)
+        sa.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        sa.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        sa.viewport().setAutoFillBackground(False)
+        body.setAutoFillBackground(False)
+        sa.setWidget(body)
+        return sa
+
     def _on_tab_changed(self, idx: int) -> None:
         # Reset the queue-tab highlight color once the operator is on that tab.
-        if idx == 0 and hasattr(self, "tabs"):
+        if idx == self.QUEUE_TAB_INDEX and hasattr(self, "tabs"):
             # PySide6 doesn't expose the "default" color cleanly, so we clear
             # by passing an invalid QColor which restores the stylesheet default.
             from PySide6.QtGui import QColor
-            self.tabs.tabBar().setTabTextColor(0, QColor())
+            self.tabs.tabBar().setTabTextColor(self.QUEUE_TAB_INDEX, QColor())
 
     # ---- top header ----
     def _build_header(self) -> QHBoxLayout:
@@ -568,7 +599,24 @@ class ControlWindow(QWidget):
         sb.addWidget(self.lblMq, 1, 0, 1, 2)
         return status_box
 
-    # ---- FX grid ----
+    # ---- tab: FX grid ----
+    def _build_fx_tab(self) -> QWidget:
+        w = QWidget()
+        layout = QVBoxLayout(w)
+        layout.setContentsMargins(10, 12, 10, 10)
+        layout.setSpacing(8)
+        layout.addWidget(self._build_fx())
+        hint = QLabel(
+            "本機から直接エフェクトを出します（リモートの ACCEPT 状態に関係なく"
+            "常に有効）。「MARQUEE STOP」は流れている文字を全て消します。"
+            " 音量は上の「効果音」スライダ、効果ごとの倍率は config の"
+            " fx_volume_<name>_pct で調整できます。")
+        hint.setProperty("class", "small")
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+        layout.addStretch(1)
+        return w
+
     def _build_fx(self) -> QWidget:
         fx_box = QGroupBox("エフェクト")
         gx = QGridLayout(fx_box)
@@ -1663,7 +1711,7 @@ class ControlWindow(QWidget):
         self._last_queue_count = n
         if n > prev and self.tabs.currentIndex() != 0:
             # QTabBar tab-text color for tab 0 — a bright orange dot of attention
-            self.tabs.tabBar().setTabTextColor(0, Qt.GlobalColor.yellow)
+            self.tabs.tabBar().setTabTextColor(self.QUEUE_TAB_INDEX, Qt.GlobalColor.yellow)
 
     def _dispatch_play(self, item: QueueItem, origin: str = "manual") -> None:
         """Route a taken queue item to display / audio engine.
