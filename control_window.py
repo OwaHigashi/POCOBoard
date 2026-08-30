@@ -458,6 +458,11 @@ class ControlWindow(QWidget):
         # Mirror display-side piano-mode toggles back into the bridge so the
         # HTTP layer agrees with what the operator sees on screen.
         self.display.pianoModeChanged.connect(self._on_piano_mode_changed)
+        self.display.pianoCompactChanged.connect(self._on_piano_compact_changed)
+        # Horizontal-correction preset flips (モード 1 / 2) come back from
+        # the display so the buttons + both spinboxes stay in sync even
+        # when the switch originates elsewhere.
+        self.display.hstretchModeChanged.connect(self._on_hstretch_mode_changed)
 
         self.setWindowTitle("POCOBoard — Control")
         self.setStyleSheet(_QSS)
@@ -610,9 +615,9 @@ class ControlWindow(QWidget):
         lblFx.setToolTip("BOMB / CHEER などのアイテム効果音の音量")
         self.volFxSlider = QSlider(Qt.Orientation.Horizontal)
         self.volFxSlider.setRange(0, 100)
-        self.volFxSlider.setValue(80)
+        self.volFxSlider.setValue(30)
         self.volFxSlider.valueChanged.connect(self._on_fx_volume_changed)
-        self.lblVolFx = QLabel("80 / 100")
+        self.lblVolFx = QLabel("30 / 100")
         self.lblVolFx.setMinimumWidth(80)
         gl.addWidget(lblFx,            0, 0)
         gl.addWidget(self.volFxSlider, 0, 1)
@@ -842,6 +847,28 @@ class ControlWindow(QWidget):
         # canvas and stretch to full width, so the downstream squeeze
         # restores true proportions.  The camera has its own (squared)
         # correction in the camera box below.
+        # Two switchable presets (モード 1 = 100 % no correction, モード 2
+        # = 297 % rig calibration).  Each preset holds BOTH the output
+        # correction here and the camera stretch in the camera box; the
+        # spinboxes edit whichever preset is active.
+        mode_row = QHBoxLayout()
+        mode_row.setSpacing(8)
+        mode_row.addWidget(QLabel("横補正モード:"))
+        self.btnHStretch1 = QPushButton()
+        self.btnHStretch2 = QPushButton()
+        for n, b in ((1, self.btnHStretch1), (2, self.btnHStretch2)):
+            b.setCheckable(True)
+            b.setMinimumHeight(36)
+            b.setToolTip(
+                "演出の横補正とカメラの横引き延ばしをまとめて切り替えます。\n"
+                "モード 1 = 100 % (補正なし) / モード 2 = 297 % (実機校正値)。\n"
+                "各モードの値は下の演出スピンボックスとカメラ欄の横引き延ばしで\n"
+                "変更でき、config.ini の *_hstretch_pct1 / *_hstretch_pct2 に\n"
+                "対応します。")
+            b.clicked.connect(lambda _c=False, m=n: self._on_hstretch_mode_clicked(m))
+            mode_row.addWidget(b, 1)
+        dl.addLayout(mode_row, 4, 0, 1, 3)
+
         out_row = QHBoxLayout()
         out_row.setSpacing(8)
         out_row.addWidget(QLabel("演出の横補正 (効果・文字・ピアノ):"))
@@ -856,13 +883,13 @@ class ControlWindow(QWidget):
             "エフェクト・飛ぶ文字・ピアノロール・写真・動画を横に狭い仮想画面で\n"
             "構成してから横一杯に引き延ばして出力します。出力チェーンの圧縮で\n"
             "正しい比率に戻り、ピアノロールは全 88 鍵が最終画面の横幅に並びます。\n"
-            "100 % = 補正なし / 297 % = 既定（実機で校正。カメラの横引き延ばしと\n"
-            "同じ値）。変更時、流れている文字と実行中の効果は一旦クリアされます。\n"
-            "カメラ映像は上のカメラ欄で別途補正します。")
+            "100 % = 補正なし / 297 % = 実機校正値。値は現在選択中の横補正モード\n"
+            "に保存されます。変更時、流れている文字と実行中の効果は一旦クリア\n"
+            "されます。カメラ映像は上のカメラ欄で別途補正します。")
         self.spOutputHStretch.valueChanged.connect(self._on_output_hstretch_changed)
         out_row.addWidget(self.spOutputHStretch)
         out_row.addStretch(1)
-        dl.addLayout(out_row, 4, 0, 1, 3)
+        dl.addLayout(out_row, 5, 0, 1, 3)
 
         hint = QLabel(
             "※ リモートからアップロードされた画像/動画/音声は自動で背景になります。"
@@ -871,22 +898,70 @@ class ControlWindow(QWidget):
             " 強制停止は「停止」ボタンで。")
         hint.setProperty("class", "small")
         hint.setWordWrap(True)
-        dl.addWidget(hint, 5, 0, 1, 3)
+        dl.addWidget(hint, 6, 0, 1, 3)
 
         # ---- Live camera (USB / virtual camera) ----
         camera_box = self._build_camera_box()
-        dl.addWidget(camera_box, 6, 0, 1, 3)
+        dl.addWidget(camera_box, 7, 0, 1, 3)
 
         # ---- Piano roll (USB MIDI) ----
         piano_box = self._build_piano_box()
-        dl.addWidget(piano_box, 7, 0, 1, 3)
+        dl.addWidget(piano_box, 8, 0, 1, 3)
 
-        dl.setRowStretch(8, 1)
+        dl.setRowStretch(9, 1)
+        # Both spinboxes exist now — paint the mode buttons' captions
+        # (they show each preset's values) and checked state.
+        self._refresh_hstretch_ui()
         return w
 
     def _on_output_hstretch_changed(self, v: int) -> None:
         self.display.set_output_hstretch(v / 100.0)
         self._log_local("ADMIN", f"演出の横補正 {v} %")
+        self._refresh_hstretch_ui()
+
+    # ---- horizontal-correction presets (モード 1 / 2) ----
+    def _refresh_hstretch_ui(self) -> None:
+        """Button captions show each preset's values; the active one is
+        checked.  Spinboxes are re-synced (signals blocked) so flipping a
+        preset does not re-enter the display setters."""
+        if not hasattr(self, "btnHStretch1") or not hasattr(self, "spCamHStretch"):
+            return
+        active = self.display.hstretch_mode()
+        for n, b in ((1, self.btnHStretch1), (2, self.btnHStretch2)):
+            cam, out = self.display.hstretch_preset(n)
+            cam_pct = int(round(cam * 100))
+            out_pct = int(round(out * 100))
+            if cam_pct == out_pct:
+                b.setText(f"モード {n}  ({out_pct} %)")
+            else:
+                b.setText(f"モード {n}  (演出 {out_pct} % / カメラ {cam_pct} %)")
+            b.blockSignals(True)
+            b.setChecked(n == active)
+            b.blockSignals(False)
+            b.setProperty("class", "toggleOn" if n == active else "toggleOff")
+            _repolish(b)
+        for sp, val in ((self.spOutputHStretch, self.display._output_hstretch),
+                        (self.spCamHStretch,    self.display._camera_hstretch)):
+            sp.blockSignals(True)
+            sp.setValue(int(round(val * 100)))
+            sp.blockSignals(False)
+
+    def _on_hstretch_mode_clicked(self, mode: int) -> None:
+        # Clicking the already-active button must not un-check it.
+        if mode == self.display.hstretch_mode():
+            self._refresh_hstretch_ui()
+            return
+        self.display.set_hstretch_mode(mode)
+        # hstretchModeChanged → _on_hstretch_mode_changed repaints the UI.
+
+    @Slot(int)
+    def _on_hstretch_mode_changed(self, mode: int) -> None:
+        cam, out = self.display.hstretch_preset(mode)
+        self._log_local(
+            "ADMIN",
+            f"横補正モード {mode} (演出 {int(round(out * 100))} % / "
+            f"カメラ {int(round(cam * 100))} %)")
+        self._refresh_hstretch_ui()
 
     # ---- live camera (USB / virtual camera) controls ----
     def _build_camera_box(self) -> QWidget:
@@ -969,8 +1044,9 @@ class ControlWindow(QWidget):
             int(round(self.display._camera_hstretch * 100)))
         self.spCamHStretch.setToolTip(
             "カメラ映像を縦はそのまま、横方向だけ中央軸を基準に引き延ばします。\n"
-            "100 % = 引き延ばしなし / 297 % = 既定（実機で校正。演出の横補正と\n"
-            "同じ値）。画面からはみ出した左右はそのまま切れます。")
+            "100 % = 引き延ばしなし / 297 % = 実機校正値。値は現在選択中の\n"
+            "横補正モード（上の「横補正モード」ボタン）に保存されます。\n"
+            "画面からはみ出した左右はそのまま切れます。")
         self.spCamHStretch.valueChanged.connect(self._on_cam_hstretch_changed)
         st_row.addWidget(self.spCamHStretch)
         st_row.addStretch(1)
@@ -1053,6 +1129,7 @@ class ControlWindow(QWidget):
 
     def _on_cam_hstretch_changed(self, v: int) -> None:
         self.display.set_camera_hstretch(v / 100.0)
+        self._refresh_hstretch_ui()
 
     # ---- piano roll (USB MIDI) controls ----
     def _build_piano_box(self) -> QWidget:
@@ -1091,10 +1168,36 @@ class ControlWindow(QWidget):
         self.btnMidiRefresh.clicked.connect(self._refresh_midi_ports)
         gl.addWidget(self.btnMidiRefresh, 1, 2)
 
-        # Row 2: roll opacity over a live camera feed.
+        # Row 2: layout — full-screen roll (photos / videos / FX overlay
+        # it translucently) vs. compact strip along the bottom (photos /
+        # videos / FX at full brightness, roll on top in the lower part
+        # of the screen).
+        lay_row = QHBoxLayout()
+        lay_row.setSpacing(8)
+        lay_row.addWidget(QLabel("表示:"))
+        self.btnPianoFull = QPushButton("通常 (全画面ロール・重ねは半透明)")
+        self.btnPianoCompact = QPushButton("コンパクト (下 1/4・写真は暗くしない)")
+        for compact, b in ((False, self.btnPianoFull), (True, self.btnPianoCompact)):
+            b.setCheckable(True)
+            b.setMinimumHeight(36)
+            b.clicked.connect(
+                lambda _c=False, c=compact: self._on_piano_layout_clicked(c))
+            lay_row.addWidget(b, 1)
+        self.btnPianoFull.setToolTip(
+            "ピアノロールが画面全体の土台になり、写真・動画・エフェクトは\n"
+            "その上に半透明で重なります（config の piano_*_opacity_pct）。")
+        self.btnPianoCompact.setToolTip(
+            "ピアノロールを画面下部の帯（既定 1/4、config の\n"
+            "piano_compact_height_pct）に縮め、写真・動画・エフェクトは\n"
+            "通常どおり明るいまま表示します。帯はその上に「ロールの濃さ」で\n"
+            "半透明に重なります。演奏中の切り替えでもノートは消えません。")
+        gl.addLayout(lay_row, 2, 0, 1, 3)
+        self._refresh_piano_layout_ui()
+
+        # Row 3: roll opacity over a live camera feed / compact strip.
         op_row = QHBoxLayout()
         op_row.setSpacing(8)
-        op_row.addWidget(QLabel("カメラ表示中のロールの濃さ:"))
+        op_row.addWidget(QLabel("ロールの濃さ (カメラ表示中 / コンパクト帯):"))
         self.spPianoRollOp = QSpinBox()
         self.spPianoRollOp.setRange(0, 100)
         self.spPianoRollOp.setSingleStep(5)
@@ -1104,12 +1207,13 @@ class ControlWindow(QWidget):
             int(round(self.display._piano_roll_opacity * 100)))
         self.spPianoRollOp.setToolTip(
             "カメラ映像の上に重なるピアノロール自体の不透明度。\n"
-            "0 % = ロールが見えない / 100 % = カメラが隠れる。\n"
-            "カメラ非表示のときは常に不透明で描画されます。")
+            "コンパクト表示では下部の帯が写真・動画・カメラの上に重なるときも\n"
+            "この値を使います。0 % = ロールが見えない / 100 % = 下が隠れる。\n"
+            "下に何も表示していないときは常に不透明で描画されます。")
         self.spPianoRollOp.valueChanged.connect(self._on_piano_roll_op_changed)
         op_row.addWidget(self.spPianoRollOp)
         op_row.addStretch(1)
-        gl.addLayout(op_row, 2, 0, 1, 3)
+        gl.addLayout(op_row, 3, 0, 1, 3)
 
         # Wire MidiEngine's first-note signal so the operator can confirm
         # MIDI events are actually flowing (the most common silent
@@ -1132,14 +1236,15 @@ class ControlWindow(QWidget):
             hint_text = (
                 "USB MIDI キーボードを接続し、「ポート更新」→「MIDI 入力:」でポートを選び、"
                 "「ピアノロール ON」を押してください。"
-                " 演出中も写真・動画・エフェクト (CHEER 等) はそのまま受付され、"
-                "鍵盤ロールの上に半透明で重ねて同時表示されます。"
-                "（不透明度は config.ini の piano_image_opacity_pct / piano_video_opacity_pct / piano_fx_opacity_pct で調整可）"
+                " 演出中も写真・動画・エフェクト (CHEER 等) はそのまま受付されます。"
+                "「通常」では鍵盤ロールの上に半透明で重ねて同時表示"
+                "（不透明度は config.ini の piano_image_opacity_pct / piano_video_opacity_pct / piano_fx_opacity_pct）、"
+                "「コンパクト」では写真・動画・エフェクトを暗くせず、ロールだけを画面下部の帯に縮めて重ねます。"
             )
         self.lblPianoHint = QLabel(hint_text)
         self.lblPianoHint.setProperty("class", "small")
         self.lblPianoHint.setWordWrap(True)
-        gl.addWidget(self.lblPianoHint, 3, 0, 1, 3)
+        gl.addWidget(self.lblPianoHint, 4, 0, 1, 3)
 
         # Initial population.
         self._refresh_midi_ports(emit_log=False)
@@ -1262,6 +1367,35 @@ class ControlWindow(QWidget):
 
     def _on_piano_roll_op_changed(self, v: int) -> None:
         self.display.set_piano_roll_opacity(v / 100.0)
+
+    def _refresh_piano_layout_ui(self) -> None:
+        if not hasattr(self, "btnPianoFull"):
+            return
+        compact = self.display.is_piano_compact()
+        for is_compact, b in ((False, self.btnPianoFull),
+                              (True, self.btnPianoCompact)):
+            on = is_compact == compact
+            b.blockSignals(True)
+            b.setChecked(on)
+            b.blockSignals(False)
+            b.setProperty("class", "toggleOn" if on else "toggleOff")
+            _repolish(b)
+
+    def _on_piano_layout_clicked(self, compact: bool) -> None:
+        if compact == self.display.is_piano_compact():
+            # Re-clicking the active button must not un-check it.
+            self._refresh_piano_layout_ui()
+            return
+        self.display.set_piano_compact(compact)
+        # pianoCompactChanged → _on_piano_compact_changed repaints the UI.
+
+    @Slot(bool)
+    def _on_piano_compact_changed(self, compact: bool) -> None:
+        self._log_local(
+            "PIANO",
+            "ピアノロール表示: コンパクト (下部の帯・写真は暗くしない)"
+            if compact else "ピアノロール表示: 通常 (全画面ロール)")
+        self._refresh_piano_layout_ui()
 
     def _on_piano_toggle_clicked(self, checked: bool) -> None:
         # Forward the new state to the display; pianoModeChanged handler

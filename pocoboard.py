@@ -75,12 +75,23 @@ def main() -> int:
     port = args.port if args.port is not None else cfg.get_int("http_port", 8080)
     startup_volume = cfg.get_int("startup_volume", 80)
     # Per-group volumes: FX one-shots vs external audio (TALK / uploaded
-    # audio / video sound).  Both fall back to startup_volume so an old
-    # config.ini keeps its previous behavior.
-    startup_fx_volume  = cfg.get_int("startup_fx_volume", startup_volume)
+    # audio / video sound).  FX defaults to 30 (the synthesized one-shots
+    # are loud); external audio falls back to startup_volume.
+    startup_fx_volume  = cfg.get_int("startup_fx_volume", 30)
     startup_ext_volume = cfg.get_int("startup_ext_volume", startup_volume)
     accept_on_boot = cfg.get_bool("accept_on_boot", True)
     debounce_ms    = cfg.get_int("debounce_ms", 300)
+    # Per-effect gain on top of the 効果音 slider (percent, 100 = as-is).
+    # BOMB ships at 50 — it is synthesized far hotter than the others.
+    fx_kind_gain_pct = {
+        kind: cfg.get_int(f"fx_volume_{kind}_pct", 50 if kind == "bomb" else 100)
+        for kind in ("bomb", "cheer", "hearts", "stars", "snow", "petals",
+                     "aurora", "laser", "sunset", "leaves")
+    }
+    # Upload size caps (MB).  0 / absent = built-in default.
+    upload_image_mb = cfg.get_int("upload_limit_image_mb", 0)
+    upload_video_mb = cfg.get_int("upload_limit_video_mb", 0)
+    upload_audio_mb = cfg.get_int("upload_limit_audio_mb", 0)
 
     fs_default = (cfg.get_bool("display_fullscreen_on_boot", True)
                   and not args.no_fullscreen)
@@ -91,6 +102,15 @@ def main() -> int:
     # text is comfortably readable for the audience.  Operators can
     # retune live from the 横スクロール tab (50–500%).
     marquee_size_pct = cfg.get_int("marquee_size_pct", 150)
+    # Scroll speed at speed-stop 1 (px/s) and pinned-message lifetime (s).
+    marquee_scroll_pps = cfg.get_int("marquee_scroll_pps", 320)
+    marquee_pin_sec    = cfg.get_float("marquee_pin_sec", 3.0)
+    # Idle title: quiet seconds before it fades back in (0 = never) and
+    # the fade-in duration.
+    idle_return_sec    = cfg.get_int("idle_return_sec", 300)
+    idle_title_fade_ms = cfg.get_int("idle_title_fade_ms", 1200)
+    # FX opacity over an uploaded video background.
+    video_fx_op        = cfg.get_int("video_fx_opacity_pct", 75)
     # image_display_sec: image background auto-clears after N seconds (0 = never).
     # media_min_play_sec: videos and uploaded audio loop until at least N seconds
     #                     have played, then stop at the next natural end (0 = play once).
@@ -103,21 +123,42 @@ def main() -> int:
     camera_device  = cfg.get_str("camera_device", "")
     camera_fx_op   = cfg.get_int("camera_fx_opacity_pct", 55)
     camera_mq_op   = cfg.get_int("camera_marquee_opacity_pct", 75)
-    # Horizontal-only stretch of the camera picture (vertical untouched,
-    # centered on the middle axis) — compensates capture chains that
-    # deliver a horizontally squeezed picture.  100 = no stretch;
-    # shipped default 297 (calibrated on the deploy rig 2026-08-06).
-    camera_hstretch  = cfg.get_int("camera_hstretch_pct", 297)
-    # Output horizontal correction for the layers POCOBoard draws itself
-    # (FX / marquee / piano roll / photos / videos).  100 = off; shipped
-    # default 297 — rig calibration found the drawn layers need the
-    # same correction as the camera.
-    output_hstretch  = cfg.get_int("output_hstretch_pct", 297)
+    camera_poll_fps = cfg.get_int("camera_dshow_poll_fps", 30)
+    # Horizontal correction comes in two switchable presets (モード 1 /
+    # モード 2), each holding a camera stretch (camera_hstretch_pctN,
+    # vertical untouched, centred on the middle axis) and an output
+    # stretch for the layers POCOBoard draws itself
+    # (output_hstretch_pctN: FX / marquee / piano roll / photos /
+    # videos).  Preset 1 = 100 % (no correction), preset 2 = 297 % (the
+    # deploy rig's calibration, 2026-08-06).  hstretch_mode picks which
+    # preset is active at boot; the operator flips them with the
+    # 横補正モード buttons on the 表示 tab.  The legacy single-value keys
+    # (camera_hstretch_pct / output_hstretch_pct) still seed preset 2.
+    camera_hstretch1 = cfg.get_int("camera_hstretch_pct1", 100)
+    output_hstretch1 = cfg.get_int("output_hstretch_pct1", 100)
+    camera_hstretch2 = cfg.get_int("camera_hstretch_pct2",
+                                   cfg.get_int("camera_hstretch_pct", 297))
+    output_hstretch2 = cfg.get_int("output_hstretch_pct2",
+                                   cfg.get_int("output_hstretch_pct", 297))
+    hstretch_mode    = cfg.get_int("hstretch_mode", 2)
     piano_pps     = cfg.get_int("piano_scroll_pps", 110)
     piano_fx_op   = cfg.get_int("piano_fx_opacity_pct", 55)
     piano_roll_op = cfg.get_int("piano_roll_opacity_pct", 65)
     piano_img_op  = cfg.get_int("piano_image_opacity_pct", 35)
     piano_vid_op  = cfg.get_int("piano_video_opacity_pct", 35)
+    # Piano-roll layout: full (roll covers the screen, photos / videos /
+    # FX overlay translucently) or compact (roll confined to a strip at
+    # the bottom — piano_compact_height_pct of the screen — while photos
+    # / videos / FX show at full brightness above it).
+    piano_compact     = cfg.get_bool("piano_compact", False)
+    piano_compact_pct = cfg.get_int("piano_compact_height_pct", 25)
+    piano_compact_op  = cfg.get_int("piano_compact_opacity_pct", 65)
+    piano_compact_pos = cfg.get_str("piano_compact_position", "bottom")
+    # Keyboard height (% of screen, before the output correction divides
+    # it) and the key range drawn (MIDI note numbers, 21..108 = 88 keys).
+    piano_kb_pct   = cfg.get_int("piano_keyboard_height_pct", 18)
+    piano_note_min = cfg.get_int("piano_note_min", 21)
+    piano_note_max = cfg.get_int("piano_note_max", 108)
 
     disp_screen_cfg = (args.display_screen
                        if args.display_screen is not None
@@ -150,10 +191,13 @@ def main() -> int:
     bridge.set_debounce_ms(debounce_ms)
     bridge.set_volume(startup_ext_volume)
     bridge.set_accept(accept_on_boot)
+    bridge.set_upload_limits(upload_image_mb, upload_video_mb, upload_audio_mb)
 
     audio = AudioEngine()
     audio.set_fx_volume(startup_fx_volume)
     audio.set_ext_volume(startup_ext_volume)
+    for kind, pct in fx_kind_gain_pct.items():
+        audio.set_fx_kind_gain(kind, max(0, min(400, pct)) / 100.0)
     audio.preload()
 
     # Media queue — uploads land here and wait for the operator to press
@@ -181,8 +225,25 @@ def main() -> int:
     display.set_video_volume(max(0, min(100, startup_ext_volume)) / 100.0)
     display.set_camera_fx_opacity(max(0, min(100, camera_fx_op)) / 100.0)
     display.set_camera_marquee_opacity(max(0, min(100, camera_mq_op)) / 100.0)
-    display.set_camera_hstretch(max(50, min(400, camera_hstretch)) / 100.0)
-    display.set_output_hstretch(max(100, min(400, output_hstretch)) / 100.0)
+    display.set_piano_compact_frac(max(10, min(50, piano_compact_pct)) / 100.0)
+    display.set_piano_compact_opacity(max(0, min(100, piano_compact_op)) / 100.0)
+    display.set_piano_compact_position(piano_compact_pos)
+    display.set_piano_keyboard_height(max(2, min(60, piano_kb_pct)) / 100.0)
+    display.set_piano_note_range(piano_note_min, piano_note_max)
+    display.set_piano_compact(piano_compact)
+    display.set_idle_return_sec(idle_return_sec)
+    display.set_idle_title_fade_ms(idle_title_fade_ms)
+    display.set_video_fx_opacity(max(0, min(100, video_fx_op)) / 100.0)
+    display.set_camera_poll_fps(float(camera_poll_fps))
+    display.set_marquee_scroll_pps(float(marquee_scroll_pps))
+    display.set_marquee_pin_sec(marquee_pin_sec)
+    display.set_hstretch_preset(
+        1, max(50, min(400, camera_hstretch1)) / 100.0,
+        max(100, min(400, output_hstretch1)) / 100.0)
+    display.set_hstretch_preset(
+        2, max(50, min(400, camera_hstretch2)) / 100.0,
+        max(100, min(400, output_hstretch2)) / 100.0)
+    display.set_hstretch_mode(2 if hstretch_mode != 1 else 1)
     if camera_device:
         display.set_camera_device(camera_device)
     display.set_camera_mode(camera_on_boot)

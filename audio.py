@@ -309,8 +309,14 @@ class AudioEngine(QObject):
         # audio (TALK voice + uploaded audio files).  Listeners' incoming
         # audio tends to be much quieter than the synthesized FX, so the
         # operator needs to balance them separately.
-        self._fx_volume  = 0.8
+        # FX default 30 % (was 80 %): the synthesized one-shots are loud
+        # and the operator kept turning them down on the rig.
+        self._fx_volume  = 0.3
         self._ext_volume = 0.8
+        # Per-kind gain multiplied onto the 効果音 slider (config
+        # fx_volume_<kind>_pct).  BOMB is synthesized far hotter than the
+        # rest (sub-bass + clipped noise) so it ships at half.
+        self._fx_kind_gain: dict[str, float] = {"bomb": 0.5}
         self._fx_cache: dict[str, bytes] = {}
         self._fx_buffer: Optional[QBuffer] = None
         self._fx_sink: Optional[QAudioSink] = None
@@ -373,6 +379,18 @@ class AudioEngine(QObject):
         self._fx_volume = max(0, min(100, int(v))) / 100.0
         if self._fx_sink:
             self._fx_sink.setVolume(self._fx_volume)
+
+    # Public FX names (config / web) → internal synth keys.
+    FX_KIND_ALIASES = {"cheer": "clap"}
+
+    def set_fx_kind_gain(self, kind: str, factor: float) -> None:
+        """Per-kind gain on top of the FX slider (1.0 = slider as-is)."""
+        kind = self.FX_KIND_ALIASES.get(kind.lower(), kind.lower())
+        self._fx_kind_gain[kind] = max(0.0, min(4.0, float(factor)))
+
+    def fx_kind_gain(self, kind: str) -> float:
+        kind = self.FX_KIND_ALIASES.get(kind.lower(), kind.lower())
+        return self._fx_kind_gain.get(kind, 1.0)
 
     def set_ext_volume(self, v: int) -> None:
         self._ext_volume = max(0, min(100, int(v))) / 100.0
@@ -485,7 +503,8 @@ class AudioEngine(QObject):
         if self._fx_sink is not None:
             self._fx_sink.stop()
         self._fx_sink = _make_sink(FX_SR)
-        self._fx_sink.setVolume(self._fx_volume)
+        self._fx_sink.setVolume(
+            min(1.0, self._fx_volume * self._fx_kind_gain.get(kind, 1.0)))
         self._fx_buffer = QBuffer()
         self._fx_buffer.setData(QByteArray(data))
         self._fx_buffer.open(QIODevice.OpenModeFlag.ReadOnly)

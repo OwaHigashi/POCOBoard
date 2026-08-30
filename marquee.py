@@ -207,6 +207,10 @@ class MarqueeEngine:
     def __init__(self, base_font: QFont) -> None:
         self.base_font = QFont(base_font)
         self.tracks: list[Track] = []
+        # Live-tunable copies of the module defaults (config
+        # marquee_scroll_pps / marquee_pin_sec).
+        self.scroll_px_per_s: float = SCROLL_PX_PER_S
+        self.pin_duration_s: float = PIN_DURATION_S
         self._metrics_cache: dict[tuple, QFontMetricsF] = {}
         # QFont per size_scale — _font_at used to construct a fresh QFont
         # for every run on every painted frame (60 fps × runs).  The set
@@ -344,7 +348,7 @@ class MarqueeEngine:
             lane = self._pick_scroll_lane(n_lanes, area_w)
             # Constant pixels-per-second so speed is independent of text
             # length.  Speed 1..5 just scales it (1 = calm, 5 = fast).
-            px_per_s = SCROLL_PX_PER_S * speed
+            px_per_s = self.scroll_px_per_s * speed
             self.tracks.append(Track(
                 kind="scroll",
                 runs=laid, total_width=total_w, max_ascent=asc, max_descent=desc,
@@ -355,7 +359,7 @@ class MarqueeEngine:
             self.tracks.append(Track(
                 kind=kind,
                 runs=laid, total_width=total_w, max_ascent=asc, max_descent=desc,
-                lane=lane, lifetime_s=PIN_DURATION_S,
+                lane=lane, lifetime_s=self.pin_duration_s,
             ))
         return "OK"
 

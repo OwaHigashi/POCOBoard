@@ -51,6 +51,12 @@ class DisplayWindow(QWidget):
     visualPlaybackStopped = Signal()
     # Emitted whenever piano-roll mode toggles. `bool` = active.
     pianoModeChanged = Signal(bool)
+    # (compact) — emitted whenever the piano-roll layout flips between
+    # full-screen and the compact bottom strip.
+    pianoCompactChanged = Signal(bool)
+    # Emitted with the newly active horizontal-correction preset (1 / 2)
+    # so the control window can mirror the button state + spinboxes.
+    hstretchModeChanged = Signal(int)
 
     def __init__(self, marquee_font: QFont, status_text_cb=None) -> None:
         super().__init__()
@@ -109,9 +115,15 @@ class DisplayWindow(QWidget):
         # After IDLE_RETURN_MS of no activity, fade back into the title.
         self._show_idle_title = True
         self._last_activity_ms: float = 0.0
-        self._idle_return_ms  = 5 * 60 * 1000   # 5 minutes
+        self._idle_return_ms  = 5 * 60 * 1000   # 5 minutes (config idle_return_sec)
         # Fade-in of the title when returning from dark — 0..1, updated each tick.
         self._title_fade = 1.0
+        self._title_fade_ms: float = 1200.0     # config idle_title_fade_ms
+        # FX opacity while an uploaded video is the background (config
+        # video_fx_opacity_pct).
+        self._video_fx_opacity: float = 0.75
+        # DirectShow camera poll interval (config camera_dshow_poll_fps).
+        self._dshow_poll_ms: float = 1000.0 / 30.0
 
         # --- background layer (persistent; cleared only by operator) ---
         # Both image and video are now composited inside paintEvent so
@@ -171,6 +183,25 @@ class DisplayWindow(QWidget):
         # is underneath — the roll must NOT hide the camera (user spec:
         # ピアノロール画面自体が半透明).  1.0 (opaque) when no camera.
         self._piano_roll_opacity:  float = 0.65
+        # Layout: False = the roll covers the whole screen and photos /
+        # videos / FX overlay it translucently (dimmed by the opacities
+        # above).  True = "compact": the roll is confined to a strip at
+        # the bottom (_piano_compact_frac of the height) and photos /
+        # videos / FX show at full brightness above it, exactly as they
+        # do outside piano mode.
+        self._piano_compact: bool = False
+        self._piano_compact_frac: float = 0.25
+        # Opacity of the compact strip when something shows underneath
+        # (config piano_compact_opacity_pct) and where it sits
+        # ("bottom" / "top", config piano_compact_position).
+        self._piano_compact_opacity: float = 0.65
+        self._piano_compact_position: str = "bottom"
+        # Keyboard height as a fraction of the screen BEFORE the output
+        # correction divides it (config piano_keyboard_height_pct).
+        self._piano_kb_base_frac: float = PianoRollScene.KEYBOARD_HEIGHT_FRAC
+        # Key range (config piano_note_min / piano_note_max).
+        self._piano_note_min: int = PianoRollScene.MIN_NOTE
+        self._piano_note_max: int = PianoRollScene.MAX_NOTE
 
         # --- live camera (USB / virtual camera) mode ---
         # When on, the camera feed acts as the idle background: it fills
@@ -225,6 +256,15 @@ class DisplayWindow(QWidget):
         # full keyboard spans the final screen.  1.0 = off.  Config
         # output_hstretch_pct, shipped default 297.
         self._output_hstretch: float = 2.97
+        # Two switchable presets of (camera_hstretch, output_hstretch):
+        # preset 1 = no correction (100 %), preset 2 = the rig's 297 %.
+        # Editing either spinbox on the control window rewrites the
+        # ACTIVE preset; the 横補正モード buttons flip between them.
+        self._hstretch_presets: dict[int, tuple[float, float]] = {
+            1: (1.0, 1.0),
+            2: (2.97, 2.97),
+        }
+        self._hstretch_mode: int = 2
 
     # ---------- activity tracking ----------
     def _mark_activity(self) -> None:
@@ -258,25 +298,85 @@ class DisplayWindow(QWidget):
             return max(1, int(round(w / self._output_hstretch))), h
         return w, h
 
+    def _piano_scene_size(self) -> tuple[int, int]:
+        """Canvas the piano-roll scene composes on: the full virtual
+        canvas in the normal layout, or the bottom strip in compact."""
+        vw, vh = self._virtual_size()
+        if self._piano_compact:
+            return vw, max(60, int(round(vh * self._piano_compact_frac)))
+        return vw, vh
+
+    def _piano_kb_frac(self) -> float:
+        """Keyboard height as a fraction of the piano scene's canvas.
+
+        The output correction narrows key widths on the composition
+        canvas, so the height follows the same ratio (÷ factor) to keep
+        real piano key proportions on the final screen.  In the compact
+        layout the scene canvas is only a strip, so the fraction is
+        scaled back up to keep the keyboard the same ABSOLUTE height
+        (PianoRollScene clamps it at half the strip)."""
+        frac = self._piano_kb_base_frac / self._output_hstretch
+        if self._piano_compact:
+            frac /= max(0.05, self._piano_compact_frac)
+        return frac
+
+    def _relayout_piano_scene(self) -> None:
+        if self._piano_scene is None:
+            return
+        sw, sh = self._piano_scene_size()
+        self._piano_scene.resize(sw, sh)
+        self._piano_scene.set_kb_frac(self._piano_kb_frac())
+
     @Slot(float)
     def set_output_hstretch(self, factor: float) -> None:
-        """Horizontal pre-stretch for the drawn layers (1.0 = off)."""
+        """Horizontal pre-stretch for the drawn layers (1.0 = off).
+        Also rewrites the output half of the ACTIVE preset."""
         factor = max(1.0, min(4.0, float(factor)))
+        cam, _ = self._hstretch_presets[self._hstretch_mode]
+        self._hstretch_presets[self._hstretch_mode] = (cam, factor)
         if abs(factor - self._output_hstretch) < 1e-6:
             return
         self._output_hstretch = factor
-        vw, vh = self._virtual_size()
         # In-flight marquee tracks and a running FX scene were laid out
         # against the old canvas geometry — clear them (same policy as
         # marquee size changes); the piano scene can simply re-layout.
         self._marquee.stop_all()
         self._emit_marquee_status()
         self._scene = None
-        if self._piano_scene is not None:
-            self._piano_scene.resize(vw, vh)
-            self._piano_scene.set_kb_frac(
-                PianoRollScene.KEYBOARD_HEIGHT_FRAC / factor)
+        self._relayout_piano_scene()
         self._dirty = True
+
+    # ---------- horizontal-correction presets (モード 1 / 2) ----------
+    def hstretch_mode(self) -> int:
+        return self._hstretch_mode
+
+    def hstretch_preset(self, mode: int) -> tuple[float, float]:
+        """(camera_factor, output_factor) stored for preset `mode`."""
+        return self._hstretch_presets[1 if mode == 1 else 2]
+
+    def set_hstretch_preset(self, mode: int, camera: float,
+                            output: float) -> None:
+        """Store a preset without activating it.  If `mode` IS the active
+        preset the new values take effect immediately."""
+        mode = 1 if mode == 1 else 2
+        camera = max(0.5, min(4.0, float(camera)))
+        output = max(1.0, min(4.0, float(output)))
+        self._hstretch_presets[mode] = (camera, output)
+        if mode == self._hstretch_mode:
+            self.set_camera_hstretch(camera)
+            self.set_output_hstretch(output)
+
+    @Slot(int)
+    def set_hstretch_mode(self, mode: int) -> None:
+        """Activate preset 1 or 2 (applies both stretches at once)."""
+        mode = 1 if mode == 1 else 2
+        camera, output = self._hstretch_presets[mode]
+        changed = mode != self._hstretch_mode
+        self._hstretch_mode = mode
+        self.set_camera_hstretch(camera)
+        self.set_output_hstretch(output)
+        if changed:
+            self.hstretchModeChanged.emit(mode)
 
     # ---------- public slots (called from any thread via QueuedConnection) ----------
     @Slot(str)
@@ -440,8 +540,12 @@ class DisplayWindow(QWidget):
 
         1.0 = undistorted letterbox; larger values widen the picture
         about the center axis while the vertical size stays put.
-        Overflow past the window edges is clipped."""
+        Overflow past the window edges is clipped.  Also rewrites the
+        camera half of the ACTIVE preset."""
         self._camera_hstretch = max(0.5, min(4.0, float(factor)))
+        _, out = self._hstretch_presets[self._hstretch_mode]
+        self._hstretch_presets[self._hstretch_mode] = (
+            self._camera_hstretch, out)
         self._dirty = True
 
     def _ingest_camera_frame(self, img: QImage) -> None:
@@ -636,15 +740,16 @@ class DisplayWindow(QWidget):
             # semi-transparent overlays on top of the keyboard scene
             # (see paintEvent).  Triggers a repaint so the new base layer
             # appears immediately.
-            vw, vh = self._virtual_size()
+            sw, sh = self._piano_scene_size()
             # Keyboard height shrinks with the output correction — the
             # correction narrows key widths on the composition canvas,
             # so the height follows the same ratio to keep real piano
-            # key proportions on the final screen.
+            # key proportions on the final screen (see _piano_kb_frac).
             self._piano_scene = PianoRollScene(
-                vw, vh, scroll_pps=self._piano_scroll_pps,
-                kb_frac=(PianoRollScene.KEYBOARD_HEIGHT_FRAC
-                         / self._output_hstretch))
+                sw, sh, scroll_pps=self._piano_scroll_pps,
+                kb_frac=self._piano_kb_frac(),
+                note_min=self._piano_note_min,
+                note_max=self._piano_note_max)
             self._mark_activity()
         else:
             # Release every held note and drop the scene.
@@ -653,6 +758,97 @@ class DisplayWindow(QWidget):
             self._piano_scene = None
         self.pianoModeChanged.emit(on)
         self.update()
+
+    def is_piano_compact(self) -> bool:
+        return self._piano_compact
+
+    @Slot(bool)
+    def set_piano_compact(self, on: bool) -> None:
+        """Switch the piano-roll layout.
+
+        False (normal): the roll covers the whole screen; photos /
+        videos / FX overlay it translucently.
+        True (compact): the roll is a strip at the bottom
+        (_piano_compact_frac of the height) drawn ON TOP of the normal
+        visual stack, so photos / videos / FX keep full brightness.
+        Held / scrolling notes survive the switch."""
+        on = bool(on)
+        if on == self._piano_compact:
+            return
+        self._piano_compact = on
+        self._relayout_piano_scene()
+        self.pianoCompactChanged.emit(on)
+        self._dirty = True
+        self.update()
+
+    @Slot(float)
+    def set_piano_compact_frac(self, frac: float) -> None:
+        """Height of the compact strip as a fraction of the screen."""
+        self._piano_compact_frac = max(0.1, min(0.5, float(frac)))
+        if self._piano_compact:
+            self._relayout_piano_scene()
+            self._dirty = True
+
+    @Slot(float)
+    def set_piano_compact_opacity(self, opacity: float) -> None:
+        """Opacity of the compact strip over an underlying picture."""
+        self._piano_compact_opacity = max(0.0, min(1.0, float(opacity)))
+        self._dirty = True
+
+    @Slot(str)
+    def set_piano_compact_position(self, pos: str) -> None:
+        """'bottom' (default) or 'top' — where the compact strip sits."""
+        self._piano_compact_position = ("top" if str(pos).strip().lower() == "top"
+                                        else "bottom")
+        self._dirty = True
+
+    @Slot(float)
+    def set_piano_keyboard_height(self, frac: float) -> None:
+        """Keyboard height as a fraction of the screen (before the output
+        correction divides it).  Default 0.18."""
+        self._piano_kb_base_frac = max(0.02, min(0.6, float(frac)))
+        self._relayout_piano_scene()
+        self._dirty = True
+
+    def set_piano_note_range(self, note_min: int, note_max: int) -> None:
+        """MIDI note range drawn (defaults 21..108 = 88 keys).  Applies to
+        the next piano-mode ON (the running scene keeps its layout)."""
+        lo = max(0, min(127, int(note_min)))
+        hi = max(lo, min(127, int(note_max)))
+        self._piano_note_min, self._piano_note_max = lo, hi
+
+    # ---------- misc config-driven tunables ----------
+    @Slot(int)
+    def set_idle_return_sec(self, sec: int) -> None:
+        """Quiet time before the POCOBOARD title fades back in (0 = never)."""
+        sec = max(0, int(sec))
+        self._idle_return_ms = sec * 1000 if sec > 0 else float("inf")
+
+    @Slot(int)
+    def set_idle_title_fade_ms(self, ms: int) -> None:
+        self._title_fade_ms = max(1.0, float(ms))
+
+    @Slot(float)
+    def set_video_fx_opacity(self, opacity: float) -> None:
+        """FX opacity while an uploaded video is the background."""
+        self._video_fx_opacity = max(0.0, min(1.0, float(opacity)))
+        self._dirty = True
+
+    @Slot(float)
+    def set_camera_poll_fps(self, fps: float) -> None:
+        """Poll rate for the DirectShow camera backend."""
+        fps = max(1.0, min(120.0, float(fps)))
+        self._dshow_poll_ms = 1000.0 / fps
+
+    @Slot(float)
+    def set_marquee_scroll_pps(self, pps: float) -> None:
+        """Marquee speed at speed-stop 1, in px/s (stops 1..5 multiply it)."""
+        self._marquee.scroll_px_per_s = max(20.0, float(pps))
+
+    @Slot(float)
+    def set_marquee_pin_sec(self, sec: float) -> None:
+        """On-screen lifetime of <ue>/<shita> pinned messages."""
+        self._marquee.pin_duration_s = max(0.5, float(sec))
 
     @Slot(int, int)
     def piano_note_on(self, note: int, velocity: int) -> None:
@@ -907,9 +1103,7 @@ class DisplayWindow(QWidget):
 
     def resizeEvent(self, ev) -> None:
         super().resizeEvent(ev)
-        if self._piano_scene is not None:
-            vw, vh = self._virtual_size()
-            self._piano_scene.resize(vw, vh)
+        self._relayout_piano_scene()
 
     def toggle_fullscreen(self) -> None:
         if self.isFullScreen():
@@ -975,7 +1169,7 @@ class DisplayWindow(QWidget):
                 and not self._video_active
                 and self._bg_image is None):
             self._dshow_poll_accum += dt_ms
-            if self._dshow_poll_accum >= 33.0:
+            if self._dshow_poll_accum >= self._dshow_poll_ms:
                 self._dshow_poll_accum = 0.0
                 try:
                     img = self._dshow_cam.grab()
@@ -992,8 +1186,8 @@ class DisplayWindow(QWidget):
                 self._show_idle_title = True
                 self._title_fade = 0.0
         if self._show_idle_title and self._title_fade < 1.0:
-            # 1.2 s ease-in from black to the branded screen.
-            self._title_fade = min(1.0, self._title_fade + dt_ms / 1200.0)
+            # Ease-in from black to the branded screen (idle_title_fade_ms).
+            self._title_fade = min(1.0, self._title_fade + dt_ms / self._title_fade_ms)
 
         animating = (self._scene is not None
                      or self._piano_scene is not None
@@ -1044,12 +1238,21 @@ class DisplayWindow(QWidget):
         # FX overlay semi-transparently on top so all four (roll +
         # image OR video + FX + marquee) stay visible together.
         #
-        #   piano-mode ON:
+        #   piano-mode ON, normal layout:
         #     1. PianoRollScene (opaque base)
         #     2. Image, if any   @ piano_image_opacity
         #     2. Video frame, if any @ piano_video_opacity
         #        (image/video are mutually exclusive in the visual slot)
         #     3. FX scene, if any @ piano_fx_opacity
+        #     4. Marquee
+        #
+        #   piano-mode ON, compact layout:
+        #     1-2. exactly the piano-mode-OFF stack below (photos /
+        #          videos / camera / FX at full brightness) ...
+        #     3. ... then the PianoRollScene as a strip along the bottom
+        #        (or top: piano_compact_position; piano_compact_height_pct
+        #        of the screen), translucent @ piano_compact_opacity over
+        #        whatever is beneath it
         #     4. Marquee
         #
         #   piano-mode OFF (legacy behavior):
@@ -1063,14 +1266,20 @@ class DisplayWindow(QWidget):
         #     3. Marquee (tunable @camera_marquee_opacity over the camera)
         has_video = self._video_active and self._latest_video_image is not None
         has_image = self._bg_image is not None and not self._bg_image.isNull()
+        piano_on = self._piano_mode and self._piano_scene is not None
+        # Full-screen roll as the base layer (normal layout) vs. a strip
+        # painted over the ordinary stack (compact layout).
+        piano_full    = piano_on and not self._piano_compact
+        piano_compact = piano_on and self._piano_compact
         # The camera acts as the bottom of the visual stack: uploaded
-        # image / video and the piano roll all take precedence over it.
-        camera_visible = (not self._piano_mode and not has_video
+        # image / video and the full-screen piano roll all take
+        # precedence over it.
+        camera_visible = (not piano_full and not has_video
                           and not has_image and self._camera_mode
                           and self._latest_camera_image is not None
                           and not self._latest_camera_image.isNull())
 
-        if self._piano_mode and self._piano_scene is not None:
+        if piano_full:
             # Base layer: live camera (if any) with the keyboard +
             # scrolling note bars over it SEMI-TRANSPARENTLY, so the
             # camera picture stays visible through the whole roll.
@@ -1128,7 +1337,7 @@ class DisplayWindow(QWidget):
 
         if self._scene is not None and self._scene.alive:
             _vpush()
-            if self._piano_mode:
+            if piano_full:
                 p.setOpacity(self._piano_fx_opacity)
                 self._scene.draw(p, w, h)
                 p.setOpacity(1.0)
@@ -1137,11 +1346,31 @@ class DisplayWindow(QWidget):
                 self._scene.draw(p, w, h)
                 p.setOpacity(1.0)
             elif has_video:
-                p.setOpacity(0.75)
+                p.setOpacity(self._video_fx_opacity)
                 self._scene.draw(p, w, h)
                 p.setOpacity(1.0)
             else:
                 self._scene.draw(p, w, h)
+            _vpop()
+
+        if piano_compact:
+            # Compact strip along the bottom, over the full-brightness
+            # stack above.  Translucent whenever something is showing
+            # underneath (camera / photo / video / idle title) so it
+            # never blacks out the bottom of the picture; opaque over a
+            # plain black background.
+            sw, sh = self._piano_scene_size()
+            has_base = (camera_visible or has_video or has_image
+                        or (self._show_idle_title and self._scene is None))
+            _vpush()
+            p.save()
+            p.translate(0, 0 if self._piano_compact_position == "top" else h - sh)
+            p.setClipRect(0, 0, sw, sh)
+            if has_base:
+                p.setOpacity(self._piano_compact_opacity)
+            self._piano_scene.draw(p, sw, sh)
+            p.setOpacity(1.0)
+            p.restore()
             _vpop()
 
         if self._marquee.tracks:

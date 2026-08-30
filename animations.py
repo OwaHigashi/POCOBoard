@@ -1723,10 +1723,19 @@ class PianoRollScene(Scene):
     KEYBOARD_HEIGHT_FRAC = 0.18
 
     def __init__(self, w: int, h: int, scroll_pps: float = 110.0,
-                 kb_frac: float | None = None) -> None:
+                 kb_frac: float | None = None,
+                 note_min: int | None = None,
+                 note_max: int | None = None) -> None:
         super().__init__(w, h)
         self.alive = True
         self.scroll_pps = float(scroll_pps)
+        # Key range shown (config piano_note_min / piano_note_max).
+        # Instance attributes shadow the class defaults (21..108 = the
+        # full 88 keys); notes outside the range are ignored.
+        if note_min is not None:
+            self.MIN_NOTE = max(0, min(127, int(note_min)))
+        if note_max is not None:
+            self.MAX_NOTE = max(self.MIN_NOTE, min(127, int(note_max)))
         # Keyboard height as a fraction of the canvas.  The display
         # divides the default by the output horizontal correction: the
         # correction narrows the key WIDTHS on the composition canvas,

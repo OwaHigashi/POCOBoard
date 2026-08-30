@@ -56,6 +56,12 @@ class Config:
         except (TypeError, ValueError):
             return default
 
+    def get_float(self, key: str, default: float = 0.0) -> float:
+        try:
+            return float(self.values.get(key, default))
+        except (TypeError, ValueError):
+            return default
+
     def get_bool(self, key: str, default: bool = False) -> bool:
         v = self.values.get(key)
         if v is None:

@@ -1484,3 +1484,95 @@ Cookie 経路は元々 JS `writeCookie` が encodeURIComponent、サーバ
   ショットと思われる。リポジトリには入れていない）。
 - 前セッションからの継続項目（297% 補正まわりの実機確認等）は
   上の「Awaiting real-rig verification」参照。
+
+---
+
+## Session 2026-08-30 — 効果音既定 30 / BOMB 半減・横補正 2 モード・ピアノロール コンパクト表示
+
+### 依頼
+
+1. 効果音の既定ボリュームを 30 に、BOMB は現状の半分に。
+2. `camera_hstretch_pct` / `output_hstretch_pct` を 2 モード化
+   （100 と 297）、操作画面のボタンで切り替え。
+3. ピアノロールに、縦を現状の 1/4 に縮めて写真等を半透明にしない
+   （暗くしない）表示モードを追加し切り替え可能に。
+
+### 実装
+
+- **音量** (`audio.py` / `pocoboard.py` / `control_window.py` /
+  `config.example.ini`): `startup_fx_volume` の既定を 30 に
+  （旧: `startup_volume` = 80 にフォールバック）。`AudioEngine._fx_volume`
+  初期値 0.3、効果音スライダ初期値 30。BOMB は
+  `AudioEngine._FX_KIND_GAIN = {"bomb": 0.5}` で `play_fx` 時に
+  スライダ値 × 0.5 をシンクに設定（波形は無変更）。
+- **横補正プリセット** (`display_window.py`): `_hstretch_presets`
+  {1: (1.0, 1.0), 2: (2.97, 2.97)}、`_hstretch_mode`（既定 2）。
+  `set_hstretch_preset(mode, cam, out)` / `set_hstretch_mode(mode)` /
+  `hstretch_mode()` / `hstretch_preset(mode)`、シグナル
+  `hstretchModeChanged(int)`。`set_camera_hstretch` / `set_output_hstretch`
+  は**アクティブなプリセットの値を書き換える**ので、スピンボックスで
+  値を変えるとそのモードに保存される。config キー:
+  `camera_hstretch_pct1/2`, `output_hstretch_pct1/2`, `hstretch_mode`
+  （旧 `camera_hstretch_pct` / `output_hstretch_pct` はプリセット 2 の
+  フォールバックとして読む）。操作画面 表示タブに「横補正モード:
+  モード 1 (100 %) / モード 2 (297 %)」ボタン（キャプションはプリセット
+  値を表示、演出とカメラの値が異なる場合は両方併記）。
+- **ピアノロール コンパクト表示** (`display_window.py`):
+  `_piano_compact` / `_piano_compact_frac`（既定 0.25）、
+  `set_piano_compact(bool)` / `is_piano_compact()` /
+  `set_piano_compact_frac(float)`、シグナル `pianoCompactChanged(bool)`。
+  `_piano_scene_size()` がシーンのキャンバス（通常 = 仮想全画面、
+  コンパクト = 幅 × 高さ 1/4 の帯）、`_piano_kb_frac()` が鍵盤高さ
+  （コンパクトでは帯高さで割り戻して**絶対高さを維持**）、
+  `_relayout_piano_scene()` に集約（resizeEvent / 横補正変更 /
+  レイアウト切替で共通利用）。paintEvent: `piano_full`（従来の
+  全画面ロール土台 + 半透明重ね）と `piano_compact` を分離。コンパクト
+  時はピアノ OFF と同じスタック（写真・動画・カメラ・FX を通常の濃さ
+  で描画）の上に、帯を `translate(0, h - sh)` + clip で最前面（マーキー
+  の直前）に描く。下に何か表示中は `piano_roll_opacity` で半透明、
+  黒背景なら不透明。ノート状態はシーンを作り直さないので切替で消えない。
+  config: `piano_compact`（既定 false）, `piano_compact_height_pct`
+  （既定 25）。操作画面 ピアノ欄に「表示: 通常 / コンパクト」ボタン。
+- 操作画面の行番号ずれ（表示タブ row 4→mode、5→出力補正、6→hint、
+  7→camera、8→piano；ピアノ欄 row 2→layout、3→濃さ、4→hint）。
+
+### 検証
+
+- `py_compile` 通過。
+- オフスクリーン (QT_QPA_PLATFORM=offscreen) スモークテスト:
+  プリセット切替で両 stretch が同時に変わる／編集がアクティブな
+  プリセットだけに保存される／コンパクト切替でノート保持・鍵盤の
+  絶対高さ一致 (54.5 px)／レンダリングで写真画素がコンパクト時は
+  元色 (#ff8040)、通常時は暗くなる (#5d3423) ことを確認。
+- **実機未確認**: BOMB の聞こえ方、モード 1 (100 %) で帯の鍵盤が
+  帯の半分 (kb_frac 0.5 clamp) になる見え方、コンパクト帯の高さの
+  好み（`piano_compact_height_pct` で調整可）。
+
+### 次セッションへ
+
+- 実機で上記 3 点を目視・試聴。
+- 帯の高さやコンパクト時の濃さの既定は要望次第で調整。
+- Web ページ (`webpage.py`) にはコンパクト切替を出していない
+  （依頼は操作画面のみ）。必要なら `/status` にフラグ追加。
+
+### 追記 (同セッション) — 調整パラメータの config 露出
+
+ユーザ要望「変更可能なパラメータを極力 config に出す」。追加キー
+（すべて既定値 = 従来のハードコード値なので既存 config.ini は挙動不変）:
+
+| キー | 既定 | 反映先 |
+|---|---|---|
+| `fx_volume_<bomb/cheer/hearts/stars/snow/petals/aurora/laser/sunset/leaves>_pct` | bomb 50 / 他 100 | `AudioEngine.set_fx_kind_gain`（cheer→内部名 clap） |
+| `upload_limit_image_mb` / `_video_mb` / `_audio_mb` | 25 / 200 / 50 | `WebBridge.set_upload_limits`（ハンドラは `bridge.upload_limits` 参照） |
+| `idle_return_sec` (0=戻らない) / `idle_title_fade_ms` | 300 / 1200 | `DisplayWindow.set_idle_return_sec` / `set_idle_title_fade_ms` |
+| `video_fx_opacity_pct` | 75 | `set_video_fx_opacity`（旧ハードコード 0.75） |
+| `camera_dshow_poll_fps` | 30 | `set_camera_poll_fps`（旧 33 ms 固定） |
+| `marquee_scroll_pps` / `marquee_pin_sec` | 320 / 3.0 | `MarqueeEngine.scroll_px_per_s` / `.pin_duration_s`（インスタンス属性化） |
+| `piano_keyboard_height_pct` | 18 | `set_piano_keyboard_height`（`_piano_kb_base_frac`、横補正で ÷） |
+| `piano_note_min` / `piano_note_max` | 21 / 108 | `set_piano_note_range` → `PianoRollScene(note_min, note_max)`（次回 ON から） |
+| `piano_compact_opacity_pct` | 65 | `set_piano_compact_opacity`（コンパクト帯は roll_opacity から独立） |
+| `piano_compact_position` | bottom | `set_piano_compact_position`（top で上端に帯） |
+
+`config.py` に `get_float` を追加。オフスクリーン スモークで各 setter と
+描画（帯 top 配置時に中央の写真が元色のまま）を確認済み。
+

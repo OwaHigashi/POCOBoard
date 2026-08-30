@@ -178,29 +178,44 @@ http://192.168.1.23:8080/
     POCOBoard は内蔵の DirectShow バックエンドで自動的に取り込みます
     （カメラ一覧に他のカメラと同様に表示されます）。
   - `横引き延ばし` — カメラ映像を**縦はそのまま、横方向だけ中央軸を
-    基準に**指定倍率へ引き延ばします（50〜400 %、既定 297 % =
-    実機校正値）。横につぶれて届く映像の補正用で、100 % にすると
-    無補正のレターボックス表示。画面からはみ出した左右は切れます
-    （config: `camera_hstretch_pct`）。実測では下の「演出の横補正」と
-    同じ値になります（圧縮は出力チェーンの一段のみ）。
+    基準に**指定倍率へ引き延ばします（50〜400 %）。横につぶれて届く
+    映像の補正用で、100 % にすると無補正のレターボックス表示。画面から
+    はみ出した左右は切れます。値は現在選択中の「横補正モード」に保存
+    されます（config: `camera_hstretch_pct1` / `camera_hstretch_pct2`）。
+    実測では下の「演出の横補正」と同じ値になります（圧縮は出力チェーン
+    の一段のみ）。
   - カメラ表示中はエフェクトと横スクロール文字が半透明で重なります。
     濃さ（不透明度）は `効果の濃さ` / `文字の濃さ` で 0〜100 % に調整可能。
   - 写真・動画がアップロードされた間はそちらが優先され、終わると
     カメラ映像に戻ります。
+- 横補正モード（モード 1 / モード 2）— 演出の横補正とカメラの横引き
+  延ばしをまとめて切り替える 2 つのプリセット。**モード 1 = 100 %**
+  （補正なし）、**モード 2 = 297 %**（実機校正値）が既定で、ボタン一つ
+  で切り替わります。各モードの値はスピンボックスで変更でき、config の
+  `*_hstretch_pct1` / `*_hstretch_pct2` に対応します。起動時のモードは
+  `hstretch_mode`（既定 2）。
 - 演出の横補正（効果・文字・ピアノ） — POCOBoard が自分で描く層
   （エフェクト・飛ぶ文字・ピアノロール・写真・動画・待受タイトル）を
   横に狭い仮想画面で構成してから横一杯に引き延ばして出力します
-  （100〜400 %、既定 297 % = 実機校正値。カメラの横引き延ばしと同じ
-  値）。これで最終画面で BOMB の円は丸く、ピアノロールは全 88 鍵が
+  （100〜400 %。297 % = 実機校正値。カメラの横引き延ばしと同じ値）。
+  これで最終画面で BOMB の円は丸く、ピアノロールは全 88 鍵が
   横幅いっぱいに並びます。鍵盤の高さも補正率に反比例して自動的に
   短くなり、最終画面で実際のピアノに近い鍵の縦横比になります。
   カメラ映像はこの補正を通らず、カメラ欄の `横引き延ばし` で別途
-  補正します（config: `output_hstretch_pct`）。
+  補正します（config: `output_hstretch_pct1` / `output_hstretch_pct2`）。
 - 🎹 ピアノロール (USB MIDI)
+  - 表示は 2 種類をボタンで切り替え:
+    - **通常** — ロールが画面全体の土台になり、写真・動画・エフェクトは
+      半透明で重なります（config: `piano_image_opacity_pct` 等）。
+    - **コンパクト** — ロールを画面下部の帯（既定 1/4、config:
+      `piano_compact_height_pct`）に縮め、写真・動画・エフェクトは
+      暗くせず通常どおり表示。帯はその上に「ロールの濃さ」で半透明に
+      重なります。演奏中に切り替えてもノートは消えません。起動時の
+      表示は `piano_compact`（既定 false = 通常）。
   - カメラ表示中は、ピアノロール自体が半透明でカメラ映像の上に重なり、
-    映像は隠れません。濃さはパネルの「カメラ表示中のロールの濃さ」
+    映像は隠れません。濃さはパネルの「ロールの濃さ」
     （config: `piano_roll_opacity_pct`、既定 65%）で調整できます。
-    カメラ非表示のときは従来どおり不透明で描画されます。
+    下に何も表示していないときは従来どおり不透明で描画されます。
 
 ### ユーザータブ
 
@@ -362,16 +377,22 @@ http_port       = 8080
 
 # ---- Audio / behaviour ----
 startup_volume  = 80          ; 両グループ共通のフォールバック
-;startup_fx_volume  = 60      ; 効果音 (BOMB/CHEER 等) の起動時音量
+startup_fx_volume  = 30       ; 効果音 (BOMB/CHEER 等) の起動時音量（既定 30）
 ;startup_ext_volume = 90      ; 外部音声 (TALK・音声・動画) の起動時音量
+fx_volume_bomb_pct   = 50     ; 効果ごとの音量倍率 (% of スライダ)。cheer/hearts/stars/snow/
+fx_volume_cheer_pct  = 100    ;   petals/aurora/laser/sunset/leaves も同様に fx_volume_<name>_pct
 accept_on_boot  = true
 debounce_ms     = 300
+;upload_limit_image_mb = 25   ; アップロード上限 (MB)。video 200 / audio 50 も同形式
 
 # ---- Display window ----
 display_screen  = -1
 display_fullscreen_on_boot = true
 display_width   = 1600
 display_height  = 900
+idle_return_sec = 300         ; 無操作でタイトルに戻るまでの秒数 (0=戻らない)
+idle_title_fade_ms = 1200     ; タイトルのフェードイン時間
+video_fx_opacity_pct = 75     ; 動画背景中のエフェクト不透明度
 
 # ---- Control window ----
 control_screen  = -1
@@ -385,12 +406,32 @@ camera_on_boot = true         ; カメラ待受モード（既定 ON）
 camera_device  =              ; 空=既定カメラ / 名前の部分一致で選択 (例: OBS)
 camera_fx_opacity_pct      = 55   ; カメラ表示中のエフェクト不透明度 (0..100)
 camera_marquee_opacity_pct = 75   ; カメラ表示中の流れる文字の不透明度 (0..100)
-camera_hstretch_pct = 297     ; カメラ横引き延ばし率 (50..400)。100=無補正、297=実機校正値
-output_hstretch_pct = 297     ; 演出(効果・文字・ピアノ等)の横補正 (100..400)。297=実機校正値
+camera_dshow_poll_fps = 30    ; DirectShow 仮想カメラの取り込みレート
+camera_hstretch_pct1 = 100    ; 横補正モード1: カメラ横引き延ばし率 (50..400)
+output_hstretch_pct1 = 100    ; 横補正モード1: 演出(効果・文字・ピアノ等)の横補正 (100..400)
+camera_hstretch_pct2 = 297    ; 横補正モード2: カメラ (297=実機校正値)
+output_hstretch_pct2 = 297    ; 横補正モード2: 演出 (297=実機校正値)
+hstretch_mode = 2             ; 起動時の横補正モード (1 / 2)
+
+# ---- Piano roll ----
+piano_scroll_pps = 110        ; ノートが上に流れる速さ (px/s)
+piano_keyboard_height_pct = 18 ; 鍵盤の高さ (画面 %、横補正で自動的に縮む)
+piano_note_min = 21           ; 表示する鍵盤範囲 (MIDI ノート番号、21..108 = 88 鍵)
+piano_note_max = 108
+piano_fx_opacity_pct = 55     ; 通常表示: ロール上のエフェクト不透明度
+piano_roll_opacity_pct = 65   ; カメラ表示中のロール自体の不透明度
+piano_image_opacity_pct = 35  ; 通常表示: ロール上の写真の不透明度
+piano_video_opacity_pct = 35  ; 通常表示: ロール上の動画の不透明度
+piano_compact = false         ; true=コンパクト表示（帯・写真は暗くしない）
+piano_compact_height_pct = 25 ; コンパクト帯の高さ (画面の %、10..50)
+piano_compact_opacity_pct = 65 ; コンパクト帯の不透明度（下に写真等があるとき）
+piano_compact_position = bottom ; 帯の位置 bottom / top
 
 # ---- Marquee ----
 marquee_size    = 64
 marquee_size_pct = 150     ; 全体スケール (50..500). 制御画面からも変更可
+marquee_scroll_pps = 320   ; 速度 1 のときの px/s (速度 1..5 で倍率)
+marquee_pin_sec = 3.0      ; <ue>/<shita> 固定表示の秒数
 ```
 
 起動時オプション:

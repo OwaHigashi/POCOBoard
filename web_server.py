@@ -94,6 +94,8 @@ class WebBridge(QObject):
         self._accept = True
         self._volume = 80
         self._debounce_ms = 300
+        # Per-kind upload size caps in bytes (config upload_limit_*_mb).
+        self.upload_limits: dict[str, int] = dict(_UPLOAD_LIMITS)
         self._last_fx_ms = 0
         # When True, the operator has switched the display into piano-roll
         # mode.  The HTTP layer rejects image / video uploads with
@@ -146,6 +148,14 @@ class WebBridge(QObject):
     def set_debounce_ms(self, v: int) -> None:
         with self._lock:
             self._debounce_ms = max(0, int(v))
+
+    def set_upload_limits(self, image_mb: int, video_mb: int,
+                          audio_mb: int) -> None:
+        """Per-kind upload caps in megabytes (0 or less = keep default)."""
+        for kind, mb in (("image", image_mb), ("video", video_mb),
+                         ("audio", audio_mb)):
+            if mb and mb > 0:
+                self.upload_limits[kind] = int(mb) * 1024 * 1024
 
     def fx_try_acquire(self, now_ms: int) -> bool:
         with self._lock:
@@ -704,7 +714,7 @@ class _Handler(BaseHTTPRequestHandler):
             if self._reject_if_not_allowed(cid, label, "UPLOAD", new_cookie):
                 return
             kind = (query.get("type", [""])[0] or "").lower()
-            if kind not in _UPLOAD_LIMITS:
+            if kind not in self.bridge.upload_limits:
                 self._send_json(400, {"ok": False, "reason": "bad_type"},
                                 set_cookie=new_cookie)
                 return
@@ -721,7 +731,7 @@ class _Handler(BaseHTTPRequestHandler):
             final_name = f"{stamp}_{tok}_{safe_name}"
             os.makedirs(self.upload_dir, exist_ok=True)
             dest = os.path.join(self.upload_dir, final_name)
-            max_bytes = _UPLOAD_LIMITS[kind]
+            max_bytes = self.bridge.upload_limits[kind]
             written = self._read_body_streamed(dest, max_bytes)
             if written <= 0:
                 try:
