@@ -23,7 +23,7 @@ POCOBoard は、LAN 内のスマホや PC のブラウザから、配信中 PC �
 - ブラウザ操作
   同一 LAN のスマホや PC から操作できます。
 - GPU ベースの FX
-  `BOMB / CHEER / HEARTS / STARS / SNOW / PETALS / AURORA / LASER / SUNSET / LEAVES`
+  `BOMB / CHEER / HEARTS / STARS / SNOW / PETALS / AURORA / LASER / SUNSET / LEAVES / NOTES / RAINBOW`
   既存 FX も粒子量・グロー・背景演出を強化。季節 FX も追加
 - TALK 音声ミックス
   複数ブラウザの音声を同時にミックスして PC スピーカへ出します。
@@ -137,31 +137,8 @@ http://192.168.1.23:8080/
 ### エフェクトタブ
 
 - FX ボタン
-  `BOMB / CHEER / HEARTS / STARS / SNOW / PETALS / AURORA / LASER / SUNSET / LEAVES / MARQUEE STOP`
+  `BOMB / CHEER / HEARTS / STARS / SNOW / PETALS / AURORA / LASER / SUNSET / LEAVES / NOTES / RAINBOW`
   本機から直接エフェクトを出します（リモートの ACCEPT 状態に関係なく有効）。
-
-### キュータブ
-
-キューは POCOBoard の運用の中心です。
-
-- `停止`
-  背景画像、背景動画、音声ファイル再生を止めます。
-- `次へ`
-  先頭のキュー項目を再生します。
-- `自動再生 ON / OFF`
-  アップロード到着時に即再生するか、キュー待ちにするかを切り替えます。
-- `全削除`
-  未再生のキュー項目だけを削除します。
-- `再生中`
-  現在流れている visual / audio を表示します。
-- `待機中のメディア`
-  各行に `再生 / 削除` があります。
-
-補足:
-
-- 画像と動画は同じ visual スロットを共有します。
-- 音声ファイルは別スロットで流れます。
-- 再生中またはキュー待ちのファイルは、自動 prune から保護されます。
 
 ### 横スクロールタブ
 
@@ -172,6 +149,9 @@ http://192.168.1.23:8080/
 - `流す / 停止`
 
 文字サイズを変更すると、現在流れているメッセージは一旦クリアされ、以後送信したメッセージが新しいサイズで表示されます（旧サイズで採寸済みのテキストと重なってしまうのを避けるためです）。起動時の既定値は `config.ini` の `marquee_size_pct`（既定 150）から読み込みます。
+- `MARQUEE STOP`
+  流れている横スクロール文字を全て消します（以前はエフェクト欄にあった
+  ボタン。エフェクトではないのでこのタブに移動）。
 
 ### 表示タブ
 
@@ -225,6 +205,29 @@ http://192.168.1.23:8080/
     （config: `piano_roll_opacity_pct`、既定 65%）で調整できます。
     下に何も表示していないときは従来どおり不透明で描画されます。
 
+### キュータブ
+
+キューは POCOBoard の運用の中心です。
+
+- `停止`
+  背景画像、背景動画、音声ファイル再生を止めます。
+- `次へ`
+  先頭のキュー項目を再生します。
+- `自動再生 ON / OFF`
+  アップロード到着時に即再生するか、キュー待ちにするかを切り替えます。
+- `全削除`
+  未再生のキュー項目だけを削除します。
+- `再生中`
+  現在流れている visual / audio を表示します。
+- `待機中のメディア`
+  各行に `再生 / 削除` があります。
+
+補足:
+
+- 画像と動画は同じ visual スロットを共有します。
+- 音声ファイルは別スロットで流れます。
+- 再生中またはキュー待ちのファイルは、自動 prune から保護されます。
+
 ### ユーザータブ
 
 - クライアント一覧
@@ -244,7 +247,7 @@ http://192.168.1.23:8080/
 ブラウザから使える主な機能は次の通りです。
 
 - 表示名設定
-- `BOMB / CHEER / HEARTS / STARS / SNOW / PETALS / AURORA / LASER / SUNSET / LEAVES`
+- `BOMB / CHEER / HEARTS / STARS / SNOW / PETALS / AURORA / LASER / SUNSET / LEAVES / NOTES / RAINBOW`
 - `TALK`
 - 画像 / 動画 / 音声アップロード
 - 横スクロール送信
@@ -317,6 +320,12 @@ http://192.168.1.23:8080/
   海と空に夕日が落ち、雲・帆船のシルエット・かもめが舞う夕景の演出。
 - `LEAVES`
   紅葉のもみじが木立と光芒の中を舞い落ちる秋色の演出。
+- `NOTES`
+  炭酸水の泡のように、たくさんの音符（♪♫♩♬）が画面の下から上へ
+  加速しながら立ちのぼる演出。細かな泡と光芒つきのラムネ色の背景。
+- `RAINBOW`
+  雨上がりの空に虹が左から右へ架かり、音符たちがその上を跳ねながら
+  渡っていく演出。跳ねるたびにきらめきが散ります。
 
 ## HTTP API
 
@@ -344,6 +353,8 @@ http://<IP>:<port>/
 | POST | `/laser` | - | LASER |
 | POST | `/sunset` | - | SUNSET |
 | POST | `/leaves` | - | LEAVES |
+| POST | `/notes` | - | NOTES |
+| POST | `/rainbow` | - | RAINBOW |
 | POST | `/talk?sr=16000` | Int16 LE mono PCM | TALK 音声送信 |
 | POST | `/marquee?speed=1..5` | UTF-8 text | 横スクロール送信 |
 | POST | `/marquee/stop` | - | 横スクロール停止 |
@@ -388,7 +399,7 @@ startup_volume  = 80          ; 両グループ共通のフォールバック
 startup_fx_volume  = 30       ; 効果音 (BOMB/CHEER 等) の起動時音量（既定 30）
 ;startup_ext_volume = 90      ; 外部音声 (TALK・音声・動画) の起動時音量
 fx_volume_bomb_pct   = 50     ; 効果ごとの音量倍率 (% of スライダ)。cheer/hearts/stars/snow/
-fx_volume_cheer_pct  = 100    ;   petals/aurora/laser/sunset/leaves も同様に fx_volume_<name>_pct
+fx_volume_cheer_pct  = 100    ;   petals/aurora/laser/sunset/leaves/notes/rainbow も同様に fx_volume_<name>_pct
 accept_on_boot  = true
 debounce_ms     = 300
 ;upload_limit_image_mb = 25   ; アップロード上限 (MB)。video 200 / audio 50 も同形式

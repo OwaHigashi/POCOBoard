@@ -194,6 +194,8 @@ INDEX_HTML = r"""<!doctype html>
   .laser  { background: linear-gradient(160deg, #cbc6e5, #b0aad7); }
   .sunset { background: linear-gradient(160deg, #e0b08f, #ca8c62); }
   .leaves { background: linear-gradient(160deg, #d9a06f, #b96d42); }
+  .notes  { background: linear-gradient(160deg, #7fc4d6, #4f9bb4); }
+  .rainbow { background: linear-gradient(160deg, #f0a8c0 0%, #f6d98a 35%, #9fd4a8 65%, #9fbdf0 100%); color: #4a3d5c; }
   .talk.recording {
     background: linear-gradient(160deg, #d7a29b, #c68279);
     animation: rec-pulse 1s ease-in-out infinite;
@@ -477,6 +479,8 @@ INDEX_HTML = r"""<!doctype html>
   <button class="fx laser"  id="btnLaser">LASER</button>
   <button class="fx sunset" id="btnSunset">SUNSET</button>
   <button class="fx leaves" id="btnLeaves">LEAVES</button>
+  <button class="fx notes"  id="btnNotes">NOTES</button>
+  <button class="fx rainbow" id="btnRainbow">RAINBOW</button>
 
   <div class="upload-box" id="uploadBox">
     <div class="upload-row">
@@ -636,7 +640,7 @@ async function refreshStatus() {
     acc.className = 'pill ' + (j.accept ? 'on' : 'off');
     document.getElementById('vol').textContent = j.volume + '/100';
     const disable = !j.accept;
-    ['btnBomb','btnClap','btnHearts','btnStars','btnSnow','btnPetals','btnAurora','btnLaser','btnSunset','btnLeaves'].forEach(id => {
+    ['btnBomb','btnClap','btnHearts','btnStars','btnSnow','btnPetals','btnAurora','btnLaser','btnSunset','btnLeaves','btnNotes','btnRainbow'].forEach(id => {
       document.getElementById(id).disabled = disable;
     });
     if (!talkActive) document.getElementById('btnTalk').disabled = disable;
@@ -715,6 +719,8 @@ document.getElementById('btnAurora').onclick = () => { flashScreen('#dff7f2'); t
 document.getElementById('btnLaser').onclick  = () => { flashScreen('#ece6ff'); trigger('laser'); };
 document.getElementById('btnSunset').onclick = () => { flashScreen('#ffd9be'); trigger('sunset'); };
 document.getElementById('btnLeaves').onclick = () => { flashScreen('#f1cfb2'); trigger('leaves'); };
+document.getElementById('btnNotes').onclick  = () => { flashScreen('#d6f2fa'); trigger('notes'); };
+document.getElementById('btnRainbow').onclick = () => { flashScreen('#fbe9f3'); trigger('rainbow'); };
 
 // ============ TALK: mic capture → POST /talk every ~500ms ============
 const TALK_TARGET_SR = 16000;

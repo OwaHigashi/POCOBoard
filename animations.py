@@ -2024,6 +2024,487 @@ class PianoRollScene(Scene):
             p.setBrush(Qt.BrushStyle.NoBrush)
             p.drawRect(r)
 
+# =====================================================
+#  NOTES — musical notes rising from the bottom like bubbles in a glass of soda
+# =====================================================
+def _note_head(path: QPainterPath, cx: float, cy: float) -> None:
+    """Tilted oval note head (unit scale) merged into `path`."""
+    head = QPainterPath()
+    head.addEllipse(QPointF(0.0, 0.0), 0.30, 0.21)
+    # Tilt the oval the way engraved note heads lean.
+    from PySide6.QtGui import QTransform
+    tr = QTransform().translate(cx, cy).rotate(-22)
+    path.addPath(tr.map(head))
+
+
+def _note_stem(path: QPainterPath, x: float, y_head: float, y_top: float) -> None:
+    path.addRect(QRectF(x - 0.045, y_top, 0.09, y_head - y_top))
+
+
+def _build_note_paths() -> tuple[QPainterPath, ...]:
+    """Vector music notes at unit scale (about -0.6..0.7 in both axes):
+    0 = eighth ♪, 1 = beamed pair ♫, 2 = quarter ♩, 3 = sixteenth pair ♬.
+    Drawn as paths (not font glyphs) so the look never depends on which
+    symbol fonts the host has."""
+    paths = []
+    # 0: eighth note with a flag
+    q = QPainterPath()
+    _note_head(q, -0.05, 0.38)
+    _note_stem(q, 0.235, 0.38, -0.58)
+    flag = QPainterPath()
+    flag.moveTo(0.19, -0.58)
+    flag.cubicTo(0.55, -0.45, 0.72, -0.15, 0.48, 0.16)
+    flag.cubicTo(0.62, -0.12, 0.50, -0.30, 0.19, -0.36)
+    flag.closeSubpath()
+    q.addPath(flag)
+    paths.append(q)
+    # 1: two eighth notes joined by one beam
+    q = QPainterPath()
+    _note_head(q, -0.36, 0.40)
+    _note_head(q, 0.30, 0.30)
+    _note_stem(q, -0.075, 0.40, -0.50)
+    _note_stem(q, 0.585, 0.30, -0.60)
+    beam = QPainterPath()
+    beam.moveTo(-0.12, -0.50); beam.lineTo(0.63, -0.60)
+    beam.lineTo(0.63, -0.44); beam.lineTo(-0.12, -0.34)
+    beam.closeSubpath()
+    q.addPath(beam)
+    paths.append(q)
+    # 2: quarter note (plain stem)
+    q = QPainterPath()
+    _note_head(q, -0.05, 0.38)
+    _note_stem(q, 0.235, 0.38, -0.58)
+    paths.append(q)
+    # 3: two sixteenths — double beam
+    q = QPainterPath()
+    _note_head(q, -0.36, 0.40)
+    _note_head(q, 0.30, 0.30)
+    _note_stem(q, -0.075, 0.40, -0.52)
+    _note_stem(q, 0.585, 0.30, -0.62)
+    for dy in (0.0, 0.22):
+        beam = QPainterPath()
+        beam.moveTo(-0.12, -0.52 + dy); beam.lineTo(0.63, -0.62 + dy)
+        beam.lineTo(0.63, -0.50 + dy); beam.lineTo(-0.12, -0.40 + dy)
+        beam.closeSubpath()
+        q.addPath(beam)
+    paths.append(q)
+    return tuple(paths)
+
+
+_NOTE_PATHS = _build_note_paths()
+_NOTE_KIND_WEIGHTS = (5, 3, 2, 2)     # ♪ most common
+
+
+class NotesScene(Scene):
+    """Soda-water bubbles, but every bubble is a music note (vector paths).
+
+    Notes are born just below the bottom edge and accelerate upward
+    (bubbles speed up as they rise), wobbling sideways and rocking a
+    little.  Three depth layers: far notes are small, pale and slow;
+    near notes are big, bright and fast.  A haze of tiny plain bubbles
+    fills in the "fizz".  Continuous spawning keeps the glass busy for
+    the whole scene, then everything fades in the last 1.2 s.
+    """
+    duration_ms = 5600.0
+    SPAWN_PER_S = 13.0        # notes born per second (after the opening burst)
+    MAX_NOTES   = 96
+    BUBBLE_PER_S = 28.0
+    MAX_BUBBLES  = 170
+
+    def __init__(self, w: int, h: int) -> None:
+        super().__init__(w, h)
+        self.notes: list[Particle] = []
+        self.bubbles: list[Particle] = []
+        self._base = max(1.0, float(min(w, h)))
+        self._note_accum = 0.0
+        self._bubble_accum = 0.0
+        self._fade_start = self.duration_ms - 1200.0
+        # Opening burst so frame 1 already has notes mid-glass.
+        for _ in range(26):
+            self._spawn_note(random.uniform(h * 0.3, h + 40))
+        for _ in range(70):
+            self._spawn_bubble(random.uniform(0, h))
+
+    # ---- spawning ----
+    def _spawn_note(self, y: float | None = None) -> None:
+        depth = random.choices((0.45, 0.72, 1.0), weights=(4, 3, 2))[0]
+        size = self._base * (0.045 + 0.085 * depth) * random.uniform(0.85, 1.15)
+        vy = -self._base * (0.10 + 0.30 * depth) * random.uniform(0.8, 1.25)
+        self.notes.append(Particle(
+            x=random.uniform(size, max(size, self.w - size)),
+            y=(self.h + size * 1.2) if y is None else y,
+            vx=0.0,
+            vy=vy,
+            life=depth,                             # depth 0..1 (1 = nearest)
+            decay=random.uniform(0.9, 1.9),         # wobble frequency (rad/s-ish)
+            size=size,
+            hue=random.uniform(0.0, 1.0),           # pastel tint + wobble phase
+            kind=random.choices(range(len(_NOTE_PATHS)), weights=_NOTE_KIND_WEIGHTS)[0],
+            rot=random.uniform(-0.35, 0.35),
+            spin=random.uniform(-0.6, 0.6),
+        ))
+
+    def _spawn_bubble(self, y: float | None = None) -> None:
+        size = self._base * random.uniform(0.003, 0.011)
+        self.bubbles.append(Particle(
+            x=random.uniform(0, self.w),
+            y=(self.h + 6) if y is None else y,
+            vx=0.0,
+            vy=-self._base * random.uniform(0.05, 0.16),
+            life=random.uniform(0.35, 0.9),
+            decay=random.uniform(1.5, 3.5),
+            size=size,
+            hue=random.uniform(0.0, math.tau),
+        ))
+
+    # ---- per-frame ----
+    def update(self, dt_ms: float) -> bool:
+        super().update(dt_ms)
+        dt = dt_ms / 1000.0
+        t = self.age_ms / 1000.0
+        spawning = self.age_ms < self._fade_start
+        base = self._base
+
+        if spawning:
+            self._note_accum += self.SPAWN_PER_S * dt
+            while self._note_accum >= 1.0 and len(self.notes) < self.MAX_NOTES:
+                self._note_accum -= 1.0
+                self._spawn_note()
+            self._note_accum = min(self._note_accum, 3.0)
+            self._bubble_accum += self.BUBBLE_PER_S * dt
+            while self._bubble_accum >= 1.0 and len(self.bubbles) < self.MAX_BUBBLES:
+                self._bubble_accum -= 1.0
+                self._spawn_bubble()
+            self._bubble_accum = min(self._bubble_accum, 4.0)
+
+        keep: list[Particle] = []
+        for n in self.notes:
+            # Bubbles accelerate as they rise (buoyancy), capped so the
+            # near layer never turns into a blur.
+            n.vy -= base * 0.11 * dt * (0.5 + n.life)
+            n.vy = max(n.vy, -base * 0.75)
+            phase = n.hue * math.tau
+            n.vx = math.sin(t * n.decay + phase) * base * (0.05 + 0.06 * n.life)
+            n.x += n.vx * dt
+            n.y += n.vy * dt
+            n.rot += n.spin * dt
+            # Rock back toward upright so the glyph never ends up sideways.
+            n.rot -= n.rot * 0.9 * dt
+            if n.y < -n.size * 2.0:
+                if spawning and len(self.notes) <= self.MAX_NOTES:
+                    # Recycle at the bottom instead of dropping — keeps
+                    # the stream dense without allocation churn.
+                    n.y = self.h + n.size * 1.2
+                    n.x = random.uniform(n.size, max(n.size, self.w - n.size))
+                    n.vy = -base * (0.10 + 0.30 * n.life) * random.uniform(0.8, 1.25)
+                    n.kind = random.choices(range(len(_NOTE_PATHS)), weights=_NOTE_KIND_WEIGHTS)[0]
+                    keep.append(n)
+                continue
+            keep.append(n)
+        self.notes = keep
+
+        keep_b: list[Particle] = []
+        for b in self.bubbles:
+            b.vy -= base * 0.04 * dt
+            b.x += math.sin(t * b.decay + b.hue) * base * 0.03 * dt
+            b.y += b.vy * dt
+            if b.y < -10:
+                if spawning:
+                    b.y = self.h + 6
+                    b.x = random.uniform(0, self.w)
+                    b.vy = -base * random.uniform(0.05, 0.16)
+                    keep_b.append(b)
+                continue
+            keep_b.append(b)
+        self.bubbles = keep_b
+        return self.alive
+
+    def draw(self, p: QPainter, w: int, h: int) -> None:
+        # Glass of ramune: deep teal at the bottom, brighter toward the
+        # surface, with a foam line and a couple of light shafts.
+        grad = QLinearGradient(0, 0, 0, h)
+        grad.setColorAt(0.0,  QColor(38, 128, 156))
+        grad.setColorAt(0.45, QColor(16, 78, 116))
+        grad.setColorAt(1.0,  QColor(6, 30, 58))
+        p.fillRect(0, 0, w, h, QBrush(grad))
+
+        fade_left = 1.0
+        if self.age_ms > self._fade_start:
+            fade_left = max(0.0, 1.0 - (self.age_ms - self._fade_start) / 1200.0)
+
+        # Light shafts angling down from the surface.
+        p.setPen(Qt.PenStyle.NoPen)
+        for i, (xf, wf, a) in enumerate(((0.18, 0.12, 26), (0.52, 0.09, 20), (0.80, 0.14, 24))):
+            sway = math.sin(self.age_ms / 1000.0 * 0.5 + i) * w * 0.02
+            path = QPainterPath()
+            path.moveTo(w * xf + sway, 0)
+            path.lineTo(w * (xf + wf) + sway, 0)
+            path.lineTo(w * (xf + wf * 2.2) + sway, h)
+            path.lineTo(w * (xf - wf * 0.6) + sway, h)
+            path.closeSubpath()
+            shaft = QLinearGradient(0, 0, 0, h)
+            shaft.setColorAt(0.0, QColor(210, 245, 255, int(a * fade_left)))
+            shaft.setColorAt(1.0, QColor(210, 245, 255, 0))
+            p.setBrush(QBrush(shaft))
+            p.drawPath(path)
+
+        # Surface foam near the top.
+        surf_y = h * 0.075
+        foam = QLinearGradient(0, surf_y - h * 0.05, 0, surf_y + h * 0.04)
+        foam.setColorAt(0.0, QColor(235, 250, 255, 0))
+        foam.setColorAt(0.5, QColor(235, 250, 255, int(70 * fade_left)))
+        foam.setColorAt(1.0, QColor(235, 250, 255, 0))
+        p.fillRect(QRectF(0, surf_y - h * 0.05, w, h * 0.09), QBrush(foam))
+        p.setPen(QPen(QColor(255, 255, 255, int(120 * fade_left)), 2.0))
+        p.drawLine(QPointF(0, surf_y), QPointF(w, surf_y))
+
+        # Fizz: tiny plain bubbles (ring + highlight).
+        for b in self.bubbles:
+            a = b.life * fade_left
+            p.setPen(QPen(QColor(220, 245, 255, int(150 * a)), 1.0))
+            p.setBrush(QColor(255, 255, 255, int(26 * a)))
+            p.drawEllipse(QPointF(b.x, b.y), b.size, b.size)
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(QColor(255, 255, 255, int(150 * a)))
+            hl = max(0.6, b.size * 0.3)
+            p.drawEllipse(QPointF(b.x - b.size * 0.35, b.y - b.size * 0.35), hl, hl)
+
+        # Notes — far layer first so near ones overlap them.
+        for n in sorted(self.notes, key=lambda q: q.life):
+            depth = n.life
+            a = (0.45 + 0.55 * depth) * fade_left
+            if a <= 0.01:
+                continue
+            col = hsv(n.hue, 0.35 + 0.25 * depth, 1.0, a)
+            glow = hsv(n.hue, 0.55, 1.0, 0.28 * a)
+            _draw_glow(p, n.x, n.y, n.size * 0.9, glow)
+            p.save()
+            p.translate(n.x, n.y)
+            p.rotate(math.degrees(n.rot))
+            p.scale(n.size, n.size)
+            # Dark rim (pen scales with the note) so pale notes read
+            # over the foam and light shafts.
+            p.setPen(QPen(QColor(0, 30, 50, int(150 * a)), 0.10,
+                          Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap,
+                          Qt.PenJoinStyle.RoundJoin))
+            p.setBrush(col)
+            p.drawPath(_NOTE_PATHS[n.kind])
+            # Specular highlight on the head — sells the "bubble" read.
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(QColor(255, 255, 255, int(170 * a)))
+            hx = -0.36 if n.kind in (1, 3) else -0.05
+            hy = 0.40 if n.kind in (1, 3) else 0.38
+            p.drawEllipse(QPointF(hx - 0.10, hy - 0.08), 0.07, 0.05)
+            p.restore()
+        _fill_vignette(p, w, h, 90)
+
+
+# =====================================================
+#  RAINBOW — a rainbow sweeps across the sky and music notes walk over it
+# =====================================================
+_RAINBOW_BANDS = (
+    (255,  70,  70), (255, 150,  40), (255, 225,  60), (110, 210,  90),
+    ( 70, 170, 255), ( 90, 100, 230), (170,  90, 220),
+)
+
+
+class RainbowScene(Scene):
+    """Sky + soft clouds; a seven-band rainbow paints itself in from the
+    left foot to the right over ~1.6 s, then a stream of music notes
+    (the NOTES vector glyphs) crosses the arch left → right, bobbing on
+    the bands and leaving sparkle trails.  Everything fades in the last
+    1.3 s."""
+    duration_ms = 7000.0
+    SWEEP_MS    = 1600.0          # rainbow draw-in time
+    NOTE_START  = 900.0           # first note leaves the left foot
+    SPAWN_PER_S = 3.2
+    MAX_NOTES   = 26
+
+    def __init__(self, w: int, h: int) -> None:
+        super().__init__(w, h)
+        self._base = max(1.0, float(min(w, h)))
+        self._fade_start = self.duration_ms - 1300.0
+        self._layout(w, h)
+        self.notes: list[Particle] = []
+        self.sparks: list[Particle] = []
+        self._note_accum = 0.6           # first note almost immediately
+        # Clouds: (x_frac, y_frac, size_frac, drift px/s)
+        self.clouds = [(random.uniform(0.0, 1.0), random.uniform(0.08, 0.45),
+                        random.uniform(0.10, 0.20), random.uniform(6, 16))
+                       for _ in range(6)]
+
+    def _layout(self, w: int, h: int) -> None:
+        # Arch centre sits just below the bottom edge so the feet land
+        # near the lower corners and the crown near the top.
+        self.cx = w * 0.5
+        self.cy = h * 1.02
+        self.r_outer = min(w * 0.47, h * 0.90)
+        self.band_w = self.r_outer * 0.032
+        self.r_inner = self.r_outer - self.band_w * len(_RAINBOW_BANDS)
+
+    def resize(self, w: int, h: int) -> None:
+        self.w, self.h = w, h
+        self._layout(w, h)
+
+    # ---- helpers ----
+    def _arc_point(self, theta: float, r: float) -> tuple[float, float]:
+        return self.cx + r * math.cos(theta), self.cy - r * math.sin(theta)
+
+    def _spawn_note(self) -> None:
+        depth = random.uniform(0.6, 1.0)
+        # Ride a band: pick a radius inside the arch (slightly above the
+        # band surface so the note appears to stand on it).
+        band = random.randrange(len(_RAINBOW_BANDS))
+        r = self.r_outer - self.band_w * (band + 0.5)
+        size = self._base * (0.06 + 0.05 * depth)
+        cross_s = random.uniform(2.6, 4.2)             # seconds to cross
+        self.notes.append(Particle(
+            x=math.pi,                                # theta (rad), π = left foot
+            y=r,                                      # radius on the arch
+            vx=-math.pi / cross_s,                    # angular speed (rad/s)
+            vy=0.0,
+            life=depth,
+            decay=random.uniform(3.0, 5.5),           # bob frequency
+            size=size,
+            hue=random.uniform(0.0, 1.0),
+            kind=random.choices(range(len(_NOTE_PATHS)), weights=_NOTE_KIND_WEIGHTS)[0],
+            rot=0.0,
+            spin=random.uniform(0, math.tau),         # bob phase
+        ))
+
+    # ---- per-frame ----
+    def update(self, dt_ms: float) -> bool:
+        super().update(dt_ms)
+        dt = dt_ms / 1000.0
+        t = self.age_ms / 1000.0
+        spawning = self.NOTE_START <= self.age_ms < self._fade_start - 600.0
+        if spawning:
+            self._note_accum += self.SPAWN_PER_S * dt
+            while self._note_accum >= 1.0 and len(self.notes) < self.MAX_NOTES:
+                self._note_accum -= 1.0
+                self._spawn_note()
+            self._note_accum = min(self._note_accum, 2.0)
+
+        keep: list[Particle] = []
+        for n in self.notes:
+            n.x += n.vx * dt                          # theta decreases → moves right
+            bob = math.sin(t * n.decay + n.spin)
+            n.vy = bob                                # cached bob for draw
+            # Lean into the direction of travel, plus a little rock.
+            n.rot = (n.x - math.pi / 2) * 0.35 + bob * 0.12
+            if n.x <= -0.05:
+                continue
+            keep.append(n)
+            # Sparkle trail on the hop peaks.
+            if bob > 0.85 and random.random() < 0.5 and len(self.sparks) < 220:
+                px, py = self._arc_point(n.x, n.y + n.size * 0.35)
+                self.sparks.append(Particle(
+                    x=px, y=py, vx=random.uniform(-25, 25), vy=random.uniform(-40, 10),
+                    life=1.0, decay=random.uniform(1.2, 2.2),
+                    size=random.uniform(3, 7) * self._base / 700.0 + 2.0,
+                    hue=n.hue))
+        self.notes = keep
+
+        keep_s: list[Particle] = []
+        for sp in self.sparks:
+            sp.life -= sp.decay * dt
+            if sp.life <= 0:
+                continue
+            sp.x += sp.vx * dt
+            sp.y += sp.vy * dt
+            sp.vy += 30 * dt
+            keep_s.append(sp)
+        self.sparks = keep_s
+        return self.alive
+
+    # ---- drawing ----
+    def draw(self, p: QPainter, w: int, h: int) -> None:
+        if w != self.w or h != self.h:
+            self.resize(w, h)
+        fade_left = 1.0
+        if self.age_ms > self._fade_start:
+            fade_left = max(0.0, 1.0 - (self.age_ms - self._fade_start) / 1300.0)
+
+        # Sky: after-the-rain blue → pale warm horizon.
+        grad = QLinearGradient(0, 0, 0, h)
+        grad.setColorAt(0.0,  QColor(88, 150, 220))
+        grad.setColorAt(0.6,  QColor(160, 200, 240))
+        grad.setColorAt(1.0,  QColor(235, 232, 215))
+        p.fillRect(0, 0, w, h, QBrush(grad))
+        _draw_glow(p, w * 0.82, h * 0.12, min(w, h) * 0.24, QColor(255, 250, 220, 70))
+
+        # Clouds drifting slowly to the right.
+        t = self.age_ms / 1000.0
+        p.setPen(Qt.PenStyle.NoPen)
+        for xf, yf, sf, drift in self.clouds:
+            cx = (xf * w + drift * t) % (w * 1.3) - w * 0.15
+            cy = yf * h
+            sz = sf * min(w, h)
+            for dx, dy, k in ((-0.55, 0.12, 0.62), (0.0, 0.0, 0.85), (0.5, 0.15, 0.6), (-0.15, 0.25, 0.7), (0.3, 0.28, 0.66)):
+                _draw_glow(p, cx + dx * sz, cy + dy * sz, sz * k,
+                           QColor(255, 255, 255, 120), edge_alpha=0.0)
+
+        # Rainbow: sweep angle grows 0 → π during SWEEP_MS (left foot first).
+        sweep = min(1.0, self.age_ms / self.SWEEP_MS)
+        sweep = 1.0 - (1.0 - sweep) ** 2                 # ease-out
+        span_deg = 180.0 * sweep
+        if span_deg > 0.5:
+            rect_of = lambda r: QRectF(self.cx - r, self.cy - r, 2 * r, 2 * r)
+            # Soft outer glow first.
+            glow_r = self.r_outer + self.band_w * 1.2
+            path = QPainterPath()
+            path.arcMoveTo(rect_of(glow_r), 180.0)
+            path.arcTo(rect_of(glow_r), 180.0, -span_deg)
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.setPen(QPen(QColor(255, 255, 255, int(60 * fade_left)),
+                          self.band_w * 3.2, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+            p.drawPath(path)
+            for i, (cr, cg, cb) in enumerate(_RAINBOW_BANDS):
+                r = self.r_outer - self.band_w * (i + 0.5)
+                path = QPainterPath()
+                path.arcMoveTo(rect_of(r), 180.0)
+                path.arcTo(rect_of(r), 180.0, -span_deg)
+                p.setPen(QPen(QColor(cr, cg, cb, int(175 * fade_left)),
+                              self.band_w * 1.06, Qt.PenStyle.SolidLine,
+                              Qt.PenCapStyle.FlatCap))
+                p.drawPath(path)
+            # Bright leading edge while the rainbow is still painting in.
+            if sweep < 1.0:
+                th = math.pi * (1.0 - sweep)
+                ex, ey = self._arc_point(th, (self.r_outer + self.r_inner) / 2)
+                _draw_glow(p, ex, ey, self.band_w * 5, QColor(255, 255, 255, int(200 * fade_left)))
+
+        # Sparkle trails.
+        for sp in self.sparks:
+            a = max(0.0, sp.life) * fade_left
+            _draw_twinkle(p, sp.x, sp.y, sp.size * 1.6, hsv(sp.hue, 0.25, 1.0, 0.9 * a))
+
+        # Notes walking the arch (drawn near → far so big ones overlap).
+        for n in sorted(self.notes, key=lambda q: q.life):
+            a = fade_left * (0.7 + 0.3 * n.life)
+            if a <= 0.01:
+                continue
+            lift = n.size * (0.55 + 0.25 * max(0.0, n.vy))   # stand on the band + hop
+            px, py = self._arc_point(n.x, n.y + lift)
+            col = hsv(n.hue, 0.30, 1.0, a)
+            _draw_glow(p, px, py, n.size * 0.8, QColor(255, 255, 255, int(70 * a)))
+            p.save()
+            p.translate(px, py)
+            p.rotate(math.degrees(n.rot))
+            p.scale(n.size, n.size)
+            p.setPen(QPen(QColor(40, 30, 70, int(160 * a)), 0.10,
+                          Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap,
+                          Qt.PenJoinStyle.RoundJoin))
+            p.setBrush(col)
+            p.drawPath(_NOTE_PATHS[n.kind])
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(QColor(255, 255, 255, int(170 * a)))
+            hx = -0.36 if n.kind in (1, 3) else -0.05
+            hy = 0.40 if n.kind in (1, 3) else 0.38
+            p.drawEllipse(QPointF(hx - 0.10, hy - 0.08), 0.07, 0.05)
+            p.restore()
+        _fill_vignette(p, w, h, 60)
+
 
 # =====================================================
 #  Scene factory
@@ -2040,4 +2521,6 @@ def make_scene(name: str, w: int, h: int) -> Scene | None:
     if name == "laser":  return LaserScene(w, h)
     if name == "sunset": return SunsetScene(w, h)
     if name == "leaves": return LeavesScene(w, h)
+    if name == "notes":  return NotesScene(w, h)
+    if name == "rainbow": return RainbowScene(w, h)
     return None

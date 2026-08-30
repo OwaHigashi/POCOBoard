@@ -167,6 +167,8 @@ QPushButton.aurora { background: #a7c8c1; border-color: #90b5ad; color: #ffffff;
 QPushButton.laser  { background: #b8b3d8; border-color: #a29cc8; color: #ffffff; }
 QPushButton.sunset { background: #d8a27f; border-color: #c48b64; color: #ffffff; }
 QPushButton.leaves { background: #ca8f62; border-color: #b3744b; color: #ffffff; }
+QPushButton.notes  { background: #7fb9cc; border-color: #62a0b6; color: #ffffff; }
+QPushButton.rainbow { background: #d3aecb; border-color: #bd94b5; color: #ffffff; }
 QPushButton.clear {
     background: #c48f80;
     border-color: #b77d6d;
@@ -515,20 +517,21 @@ class ControlWindow(QWidget):
         root.addWidget(self._build_volume())
 
         # -------- Tabs --------
-        # FX first (it was the always-visible grid), queue right after it
-        # because during a busy show it's the control the operator
-        # touches most often.  Tabs without their own internal scroll
-        # (FX / marquee / 表示) are wrapped so a tall body scrolls as a
-        # whole instead of clipping its bottom rows; queue / users / log
-        # already scroll inside.
+        # Order (operator's spec): エフェクト / 横スクロール / 表示 / キュー
+        # / ユーザー / ログ.  Tabs without their own internal scroll (FX /
+        # marquee / 表示) are wrapped so a tall body scrolls as a whole
+        # instead of clipping its bottom rows; queue / users / log
+        # already scroll inside.  Every reference to the queue tab's
+        # position goes through QUEUE_TAB_INDEX (its title carries the
+        # pending count and its color flags new arrivals).
         self.tabs = QTabWidget()
         self.tabs.addTab(self._scrollable(self._build_fx_tab()),     "✨ エフェクト")
-        self.tabs.addTab(self._build_queue_tab(),                     "📥 キュー")
         self.tabs.addTab(self._scrollable(self._build_marquee_tab()), "📢 横スクロール")
         self.tabs.addTab(self._scrollable(self._build_display_tab()), "🖥 表示")
+        self.tabs.addTab(self._build_queue_tab(),                     "📥 キュー")
         self.tabs.addTab(self._build_users_tab(),                     "👥 ユーザー")
         self.tabs.addTab(self._build_log_tab(),                       "📜 ログ")
-        self.QUEUE_TAB_INDEX = 1
+        self.QUEUE_TAB_INDEX = 3
         # Clear the attention color once the operator actually looks at the queue.
         self.tabs.currentChanged.connect(self._on_tab_changed)
         root.addWidget(self.tabs, stretch=1)
@@ -608,9 +611,9 @@ class ControlWindow(QWidget):
         layout.addWidget(self._build_fx())
         hint = QLabel(
             "本機から直接エフェクトを出します（リモートの ACCEPT 状態に関係なく"
-            "常に有効）。「MARQUEE STOP」は流れている文字を全て消します。"
-            " 音量は上の「効果音」スライダ、効果ごとの倍率は config の"
-            " fx_volume_<name>_pct で調整できます。")
+            "常に有効）。音量は上の「効果音」スライダ、効果ごとの倍率は"
+            " config の fx_volume_<name>_pct で調整できます。"
+            " 流れている文字を消すのは横スクロールタブの「MARQUEE STOP」です。")
         hint.setProperty("class", "small")
         hint.setWordWrap(True)
         layout.addWidget(hint)
@@ -634,6 +637,8 @@ class ControlWindow(QWidget):
             ("LASER",  "laser"),
             ("SUNSET", "sunset"),
             ("LEAVES", "leaves"),
+            ("NOTES",  "notes"),
+            ("RAINBOW", "rainbow"),
         ]
         for i, (label, kind) in enumerate(fx_defs):
             b = QPushButton(label)
@@ -642,11 +647,8 @@ class ControlWindow(QWidget):
             b.clicked.connect(lambda _=False, k=kind: self._local_fx(k))
             gx.addWidget(b, i // 3, i % 3)
             self.fxButtons[kind] = b
-        stop_btn = QPushButton("MARQUEE\nSTOP")
-        stop_btn.setProperty("class", "stop")
-        stop_btn.setMinimumHeight(62)
-        stop_btn.clicked.connect(self._local_marquee_stop)
-        gx.addWidget(stop_btn, 3, 1)
+        # (MARQUEE STOP used to live in this grid; it is not an effect,
+        #  so it now sits on the 横スクロール tab next to 流す.)
         return fx_box
 
     def _build_volume(self) -> QWidget:
@@ -822,9 +824,10 @@ class ControlWindow(QWidget):
         self.btnMqSend.setMinimumHeight(34)
         self.btnMqSend.clicked.connect(self._local_marquee_send)
         row2.addWidget(self.btnMqSend)
-        self.btnMqStop = QPushButton("停止")
+        self.btnMqStop = QPushButton("MARQUEE STOP")
         self.btnMqStop.setProperty("class", "stop")
-        self.btnMqStop.setMinimumWidth(100)
+        self.btnMqStop.setToolTip("流れている横スクロール文字を全て消します。")
+        self.btnMqStop.setMinimumWidth(150)
         self.btnMqStop.setMinimumHeight(34)
         self.btnMqStop.clicked.connect(self._local_marquee_stop)
         row2.addWidget(self.btnMqStop)
@@ -1583,6 +1586,8 @@ class ControlWindow(QWidget):
         "HEARTS":       "#b9778d",
         "STARS":        "#ae9558",
         "SNOW":         "#6f8fa7",
+        "NOTES":        "#5f9fb5",
+        "RAINBOW":      "#b07ea6",
         "TALK":         "#6d9aa1",
         "MARQUEE":      "#bf8960",
         "MARQUEE/STOP": "#b28787",
@@ -1703,7 +1708,7 @@ class ControlWindow(QWidget):
         if not hasattr(self, "tabs"):
             return
         label = "📥 キュー" if n == 0 else f"📥 キュー ({n})"
-        self.tabs.setTabText(0, label)
+        self.tabs.setTabText(self.QUEUE_TAB_INDEX, label)
         # When a new item arrives and we're NOT looking at the queue tab,
         # color the tab label to draw the operator's eye. Cleared when the
         # tab is selected (see currentChanged hook).
@@ -1859,7 +1864,8 @@ class ControlWindow(QWidget):
         tag = {"bomb": "BOMB", "clap": "CHEER", "hearts": "HEARTS",
                "stars": "STARS", "snow": "SNOW", "petals": "PETALS",
                "aurora": "AURORA", "laser": "LASER", "sunset": "SUNSET",
-               "leaves": "LEAVES"}.get(kind, kind.upper())
+               "leaves": "LEAVES", "notes": "NOTES",
+               "rainbow": "RAINBOW"}.get(kind, kind.upper())
         if not self.bridge.fx_try_acquire(now_ms):
             self._log_local(tag, "  ✖ busy (debounced)")
             return

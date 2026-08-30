@@ -2,7 +2,7 @@
 
 Two QAudioSink instances:
 
-  * `fx_sink`   : 44.1 kHz mono Int16 — short one-shot buffers (bomb/cheer/...)
+  * `fx_sink`   : 44.1 kHz mono Int16 — short one-shot buffers (bomb/cheer/.../notes)
   * `talk_sink` : 16 kHz mono Int16 — persistent push-mode sink fed by a
                   per-client mixer.
 
@@ -239,6 +239,83 @@ def _make_sunset(sr: int = FX_SR) -> bytes:
         foam = (random.random() * 2 - 1) * 0.04 * (0.5 + 0.5 * math.sin(2 * math.pi * 2.2 * t))
         snd[i] = (bass * 0.22 + glow * 0.1 + wave * 0.08 + foam) * env
     return _bytes_int16([math.tanh(s * 1.18) * 0.84 for s in snd])
+
+
+def _make_notes(sr: int = FX_SR) -> bytes:
+    """Fizzy bubble blips climbing in pitch over a soft pentatonic run."""
+    dur = 2.6
+    n = int(sr * dur)
+    snd = [0.0] * n
+    # Bubble pops: short upward chirps, each a little higher than the last.
+    n_blips = 34
+    for k in range(n_blips):
+        frac = k / float(n_blips)
+        t0 = frac * (dur - 0.55) + random.uniform(0.0, 0.05)
+        f0 = (520.0 + 1650.0 * frac) * random.uniform(0.75, 1.1)
+        blip = random.uniform(0.06, 0.12)
+        start = int(t0 * sr)
+        end = min(n, int((t0 + blip) * sr))
+        for i in range(start, end):
+            t = (i - start) / sr
+            f = f0 * (1.0 + 0.9 * t / blip)
+            env = math.sin(math.pi * t / blip) ** 2
+            snd[i] += math.sin(2 * math.pi * f * t) * env * 0.22
+    # Ascending pentatonic bed underneath.
+    notes = [523.25, 587.33, 659.25, 783.99, 880.0, 1046.5, 1174.66, 1318.5]
+    each = 0.22
+    for idx, f in enumerate(notes):
+        start = int(idx * each * sr)
+        end = min(n, start + int(0.7 * sr))
+        for i in range(start, end):
+            t = (i - start) / sr
+            env = math.exp(-4.0 * t) * (1.0 - math.exp(-80.0 * t))
+            snd[i] += math.sin(2 * math.pi * f * t) * env * 0.16
+            snd[i] += math.sin(2 * math.pi * f * 2.0 * t) * env * 0.05
+    # Faint carbonation hiss that dies away.
+    prev = 0.0
+    for i in range(n):
+        raw = random.random() * 2 - 1
+        prev = prev * 0.6 + raw * 0.4
+        snd[i] += prev * 0.03 * math.exp(-i / n * 2.5)
+    for i in range(n):
+        snd[i] = math.tanh(snd[i] * 1.6) * 0.85
+    return _bytes_int16(snd)
+
+
+def _make_rainbow(sr: int = FX_SR) -> bytes:
+    """Harp-like glissando up two octaves of a major scale over a soft
+    sustained chord, with a sprinkle of high sparkle."""
+    dur = 3.2
+    n = int(sr * dur)
+    snd = [0.0] * n
+    # C major, C5..C7 (15 notes) rising over ~1.9 s.
+    semis = [0, 2, 4, 5, 7, 9, 11, 12, 14, 16, 17, 19, 21, 23, 24]
+    each = 0.13
+    for idx, st in enumerate(semis):
+        f = 523.25 * (2 ** (st / 12.0))
+        start = int(idx * each * sr)
+        end = min(n, start + int(1.1 * sr))
+        for i in range(start, end):
+            t = (i - start) / sr
+            env = math.exp(-2.6 * t) * (1.0 - math.exp(-120.0 * t))
+            snd[i] += math.sin(2 * math.pi * f * t) * env * 0.17
+            snd[i] += math.sin(2 * math.pi * f * 2.0 * t) * env * 0.045
+    # Soft C-major pad that swells in and dies away.
+    for f in (261.63, 329.63, 392.00, 523.25):
+        for i in range(n):
+            t = i / sr
+            env = (1.0 - math.exp(-3.0 * t)) * math.exp(-1.1 * t)
+            snd[i] += math.sin(2 * math.pi * f * t) * env * 0.06
+    # Sparkle: a few high pings near the end of the run.
+    for offset_s, freq in ((1.6, 2093.0), (1.9, 2637.0), (2.2, 3136.0), (2.5, 4186.0)):
+        start = int(offset_s * sr)
+        for i in range(start, n):
+            t = (i - start) / sr
+            env = math.exp(-5.0 * t)
+            snd[i] += math.sin(2 * math.pi * freq * t) * env * 0.09
+    for i in range(n):
+        snd[i] = math.tanh(snd[i] * 1.5) * 0.85
+    return _bytes_int16(snd)
 
 
 def _make_leaves(sr: int = FX_SR) -> bytes:
@@ -483,6 +560,7 @@ class AudioEngine(QObject):
             "hearts": _make_hearts, "stars":  _make_stars, "snow": _make_snow,
             "petals": _make_petals, "aurora": _make_aurora, "laser": _make_laser,
             "sunset": _make_sunset, "leaves": _make_leaves,
+            "notes":  _make_notes,  "rainbow": _make_rainbow,
         }
         fn = makers.get(kind)
         if fn is None:
@@ -492,7 +570,7 @@ class AudioEngine(QObject):
         return data
 
     def preload(self) -> None:
-        for k in ("bomb", "clap", "hearts", "stars", "snow", "petals", "aurora", "laser", "sunset", "leaves"):
+        for k in ("bomb", "clap", "hearts", "stars", "snow", "petals", "aurora", "laser", "sunset", "leaves", "notes", "rainbow"):
             self._fx_bytes(k)
 
     @Slot(str)

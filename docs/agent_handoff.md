@@ -1583,10 +1583,12 @@ Cookie 経路は元々 JS `writeCookie` が encodeURIComponent、サーバ
 - 上部固定エリアはヘッダ・ステータス・音量のみ。エフェクト グリッドは
   新設の「✨ エフェクト」タブ（先頭）へ移動（`_build_fx_tab` が既存の
   `_build_fx` グループボックスを包む）。
-- タブ順: エフェクト / キュー / 横スクロール / 表示 / ユーザー / ログ。
-  キュータブの注意色（黄色）は index 0 固定だったので
-  `self.QUEUE_TAB_INDEX = 1` に置換（`_on_tab_changed` と
-  `_refresh_queue` 側の両方）。
+- タブ順（ユーザ指定）: エフェクト / 横スクロール / 表示 / キュー /
+  ユーザー / ログ。キュータブの注意色（黄色）と件数付きタイトル
+  （`_refresh_queue` の `setTabText`）は index 0 固定だったので
+  `self.QUEUE_TAB_INDEX = 3` 経由に統一。最初の版では `setTabText(0, …)`
+  を見落とし、エフェクトタブの見出しが「📥 キュー (n)」に上書きされて
+  キューが 2 つ並んで見えるバグがあった（ユーザ報告で修正）。
 - `_scrollable(body)`: 縦のみの QScrollArea（objectName `tabScroll`、
   QSS で枠なし・透明背景）でエフェクト / 横スクロール / 表示タブを包む。
   キュー / ユーザー / ログは内部にスクロールを持つのでそのまま。
@@ -1596,4 +1598,45 @@ Cookie 経路は元々 JS `writeCookie` が encodeURIComponent、サーバ
   高さを hint に任せると小さくなりすぎる。
 - README の「上部エリア」「エフェクトタブ」を更新。docs/img の
   スクリーンショットは旧レイアウトのまま（未更新）。
+
+### 追記 (同セッション) — MARQUEE STOP を横スクロールタブへ / 新エフェクト NOTES
+
+- MARQUEE STOP はエフェクトではないので FX グリッドから削除。横スクロール
+  タブの既存「停止」ボタン (`btnMqStop`、同じ `_local_marquee_stop`) を
+  「MARQUEE STOP」表記・幅 150 に変更して唯一の停止ボタンに。
+- 新エフェクト **NOTES**（`kind = "notes"`）: 炭酸水の泡のように音符
+  （♪♫♩♬）が下から上へ加速しながら立ちのぼる。音符はフォント グリフ
+  ではなく QPainterPath のベクタ（`_build_note_paths`: 8 分音符・連桁 2 個・
+  4 分音符・16 分連桁）で描く — 最初 Segoe UI Symbol のグリフで書いたら
+  オフスクリーン環境で豆腐（□）になったため、フォント非依存に変更。
+  `animations.NotesScene`（5.6 s、3 深度層、連続スポーン + 底で再利用、
+  細かい泡・光芒・水面の泡線、ラムネ色背景、最後 1.2 s フェード）。
+  効果音 `audio._make_notes`（上昇チャープの泡音 34 個 + ペンタトニック
+  上行 + 微かな炭酸ヒス、2.6 s）。
+- 登録箇所（新 FX を足すときのチェックリスト）: `animations.make_scene`、
+  `audio._fx_bytes` makers + `preload`、`pocoboard.py` の
+  fx_volume キー一覧、`web_server.py` fx_paths（`/notes`）、`webpage.py`
+  （CSS `.notes`・button・disable リスト・onclick）、`control_window.py`
+  （QSS `QPushButton.notes`・`fx_defs`・`_local_fx` タグ・`_LOG_COLORS`）、
+  `config.example.ini` `fx_volume_notes_pct`、README（機能一覧・FX 説明・
+  HTTP API 表）。
+- 検証: オフスクリーンで NotesScene を 6 s 分 update/draw（例外なし・
+  粒子数上限内・終了で alive=False）、`_make_notes` の波形が Int16 範囲内。
+  実機での見た目・音量バランス（`fx_volume_notes_pct`）は要確認。
+
+### 追記 (同セッション) — 新エフェクト RAINBOW
+
+- `kind = "rainbow"`、`animations.RainbowScene`（7.0 s）: 雨上がりの空と
+  流れる雲。7 色の虹（弧の中心は画面下端のやや下、半径 min(0.47w, 0.9h)）
+  が左足から右足へ 1.6 s で描き込まれ（先端に光点）、0.9 s 以降は音符
+  （NOTES の `_NOTE_PATHS` を流用）が左足から生まれて弧に沿って右へ渡る
+  （角速度で移動、帯の上に立つように半径を lift、跳ねる bob と進行方向への
+  傾き、跳ねの頂点できらめき `_draw_twinkle`）。最後 1.3 s フェード。
+- 効果音 `audio._make_rainbow`（ハープ風の C メジャー 2 オクターブ
+  上行グリッサンド + 弱いパッド + 高音のきらめき、3.2 s）。
+- 登録箇所は NOTES と同じチェックリスト（make_scene / makers+preload /
+  pocoboard fx_volume 一覧 / fx_paths `/rainbow` / webpage / control_window
+  / config `fx_volume_rainbow_pct` / README）。
+- 検証: オフスクリーンで 7 s 分 update/draw（例外なし）とプレビュー
+  画像で虹・音符の見た目を確認。実機での色味・音量は要確認。
 

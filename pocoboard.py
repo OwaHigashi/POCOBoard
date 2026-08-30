@@ -6,7 +6,7 @@ Inspired by M5Tab-Poco.  Two windows, multi-screen aware:
   * Display window — opens on a different monitor, fullscreen-capable.
 
 Multiple browsers on the LAN can connect to the embedded HTTP server to
-trigger BOMB/CHEER/HEARTS/STARS/SNOW effects, send scrolling text, or
+trigger BOMB/CHEER/HEARTS/STARS/SNOW/.../NOTES effects, send scrolling text, or
 speak through the host's speakers via TALK.
 
 Run:    python pocoboard.py [--config config.ini]
@@ -86,7 +86,7 @@ def main() -> int:
     fx_kind_gain_pct = {
         kind: cfg.get_int(f"fx_volume_{kind}_pct", 50 if kind == "bomb" else 100)
         for kind in ("bomb", "cheer", "hearts", "stars", "snow", "petals",
-                     "aurora", "laser", "sunset", "leaves")
+                     "aurora", "laser", "sunset", "leaves", "notes", "rainbow")
     }
     # Upload size caps (MB).  0 / absent = built-in default.
     upload_image_mb = cfg.get_int("upload_limit_image_mb", 0)

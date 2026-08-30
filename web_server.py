@@ -3,7 +3,7 @@
 Endpoints:
   GET  /                 remote-control webpage  (sets `poco_client` cookie)
   GET  /status           JSON: accept, volume, clients, marquee, me
-  POST /bomb /clap /hearts /stars /snow /petals /aurora /laser /sunset /leaves   FX triggers
+  POST /bomb /clap /hearts /stars /snow /petals /aurora /laser /sunset /leaves /notes /rainbow   FX triggers
   POST /talk             Int16LE mono PCM streamed to speaker (mixed)
   POST /marquee          UTF-8 text with markup → scrolling lane
   POST /marquee/stop     stops all marquee lanes
@@ -591,6 +591,8 @@ class _Handler(BaseHTTPRequestHandler):
             "/laser":  ("laser",  "LASER"),
             "/sunset": ("sunset", "SUNSET"),
             "/leaves": ("leaves", "LEAVES"),
+            "/notes":  ("notes",  "NOTES"),
+            "/rainbow": ("rainbow", "RAINBOW"),
         }
         if path in fx_paths:
             cid, label, ip, new_cookie = self._who()
