@@ -1712,3 +1712,22 @@ Cookie 経路は元々 JS `writeCookie` が encodeURIComponent、サーバ
   'X-Forwarded-For\|proxy_pass' /etc/nginx"` を依頼中）。
 - 注意: JOIN はアプリ起動中に「初めて見た cookie ID」ごとに 1 回。
   再起動すればレジストリが空になるので同じ人でもまた JOIN が出る。
+
+
+### 追記 (2026-09-05) — ブラウザ UI: TALK を専用コーナーへ / アップロード欄の縦圧縮
+
+- TALK はエフェクトではないので FX グリッド（BOMB〜RAINBOW、12 個 =
+  3 列 x 4 行に整列）から外し、FX とアップロード欄の間に新設の
+  `.talk-box`（`id="talkBox"`、タイトル「🎙 マイクで話す」+ 全幅 TALK
+  ボタン + HTTPS 注意の小書き）へ移動。`ensureTalkStatusLine()` は
+  btnTalk の afterend に status div を差すだけなので JS は無変更で
+  そのまま動く（recording クラス・disable 制御も id 参照のため無傷）。
+- `.talk-box` は `.marquee-box` 等と同じ共有ボックス様式に追加
+  （grid-column 1/-1・::before の飾り線・`.title` セレクタ拡張）。
+  fx ボタン既定の aspect-ratio 4/3 を打ち消す
+  `.talk-box button.fx { aspect-ratio:auto; width:100%; padding:12px }`。
+- ユーザ追加要望「アップロード等のコーナーが縦に大きすぎ」→ 共有
+  ボックスの padding 18px→12px 14px / gap 10→8、`.upload-btn` の
+  padding 16px 12px→9px 12px（モバイル媒体クエリも 12px→9px）。
+- 検証: INDEX_HTML 構造チェック（fx→talkBox→uploadBox の順、btnTalk
+  一意）。実機ブラウザでの見た目は要確認。

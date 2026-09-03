@@ -208,13 +208,14 @@ INDEX_HTML = r"""<!doctype html>
     from { opacity: 0; transform: translateY(12px); }
     to { opacity: 1; transform: translateY(0); }
   }
+  .talk-box,
   .marquee-box,
   .upload-box,
   .mine-box {
     grid-column: 1 / -1;
     display: grid;
-    gap: 10px;
-    padding: 18px;
+    gap: 8px;
+    padding: 12px 14px;
     border-radius: 24px;
     border: 1px solid var(--line);
     box-shadow: var(--shadow);
@@ -222,6 +223,7 @@ INDEX_HTML = r"""<!doctype html>
     overflow: hidden;
     background: var(--surface);
   }
+  .talk-box::before,
   .marquee-box::before,
   .upload-box::before,
   .mine-box::before {
@@ -230,6 +232,12 @@ INDEX_HTML = r"""<!doctype html>
     inset: 0 0 auto 0;
     height: 1px;
     background: linear-gradient(90deg, transparent, rgba(201, 187, 171, 0.9), transparent);
+  }
+  .talk-box button.fx {
+    aspect-ratio: auto;
+    width: 100%;
+    padding: 12px 10px;
+    font-size: clamp(20px, 3.4vw, 30px);
   }
   .mine-box {
     background: rgba(255, 249, 246, 0.94);
@@ -326,7 +334,7 @@ INDEX_HTML = r"""<!doctype html>
   .upload-btn {
     flex: 1 1 180px;
     text-align: center;
-    padding: 16px 12px;
+    padding: 9px 12px;
     border-radius: 18px;
     cursor: pointer;
     font-weight: 800;
@@ -358,6 +366,7 @@ INDEX_HTML = r"""<!doctype html>
     display: none;
   }
   .piano-overlay-note.show { display: block; }
+  .talk-box .title,
   .mine-box .title {
     font-weight: 800;
     margin-bottom: 4px;
@@ -445,7 +454,7 @@ INDEX_HTML = r"""<!doctype html>
     .marquee-row .sep { display: none; }
     .upload-row, .mine-row { flex-direction: column; }
     .upload-btn, .mine-btn { width: 100%; }
-    .upload-btn { padding: 12px 10px; font-size: 15px; }
+    .upload-btn { padding: 9px 10px; font-size: 15px; }
     .mine-btn { padding: 10px 12px; font-size: 14px; min-width: 0; }
   }
   @media (max-width: 360px) {
@@ -470,7 +479,6 @@ INDEX_HTML = r"""<!doctype html>
 <main>
   <button class="fx bomb"   id="btnBomb">BOMB</button>
   <button class="fx clap"   id="btnClap">CHEER</button>
-  <button class="fx talk"   id="btnTalk">🎙 TALK</button>
   <button class="fx hearts" id="btnHearts">HEARTS</button>
   <button class="fx stars"  id="btnStars">STARS</button>
   <button class="fx snow"   id="btnSnow">SNOW</button>
@@ -481,6 +489,16 @@ INDEX_HTML = r"""<!doctype html>
   <button class="fx leaves" id="btnLeaves">LEAVES</button>
   <button class="fx notes"  id="btnNotes">NOTES</button>
   <button class="fx rainbow" id="btnRainbow">RAINBOW</button>
+
+  <!-- TALK is not an effect — it gets its own corner between the FX grid
+       and the upload box (operator request, 2026-09-05). -->
+  <div class="talk-box" id="talkBox">
+    <div class="title">🎙 マイクで話す</div>
+    <button class="fx talk" id="btnTalk">🎙 TALK</button>
+    <div style="font-size:12px; opacity:.75;">
+      押すと録音開始、もう一度押すと停止。マイクは HTTPS でのみ使えます。
+    </div>
+  </div>
 
   <div class="upload-box" id="uploadBox">
     <div class="upload-row">
