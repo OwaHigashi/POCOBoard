@@ -505,21 +505,28 @@ class _Handler(BaseHTTPRequestHandler):
                 pass
         return written
 
-    def _who(self) -> tuple[str, str, str, Optional[str]]:
-        cid, name, ip, new_cookie = self._identity()
+    def _touch(self, cid: str, name: str, ip: str) -> str:
+        """Register/refresh the client and log JOIN the first time it is
+        seen.  GET / and /status used to call touch_client directly, so
+        the registration happened silently on page load and the JOIN line
+        never appeared (by the first POST the client was no longer new)."""
         is_new, label = self.bridge.touch_client(cid, name, ip)
         if is_new:
             now = time.strftime("%H:%M:%S")
             self.bridge.emit_log("JOIN", f"{now}  {label:24s}  JOIN      {ip}")
+        return label
+
+    def _who(self) -> tuple[str, str, str, Optional[str]]:
+        cid, name, ip, new_cookie = self._identity()
+        label = self._touch(cid, name, ip)
         return cid, label, ip, new_cookie
 
     # ===== GET =====
     def do_GET(self) -> None:
         u = urlparse(self.path)
         if u.path in ("/", "/index.html"):
-            cid, _, _, new_cookie = self._identity()
-            self.bridge.touch_client(
-                cid, "", self.client_address[0] if self.client_address else "?")
+            cid, name, ip, new_cookie = self._identity()
+            self._touch(cid, name, ip)
             body = INDEX_HTML.encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
@@ -532,7 +539,7 @@ class _Handler(BaseHTTPRequestHandler):
             return
         if u.path == "/status":
             cid, name, ip, new_cookie = self._identity()
-            self.bridge.touch_client(cid, name, ip)
+            self._touch(cid, name, ip)
             snap = self.bridge.snapshot()
             allowed, _ = self.bridge.is_allowed(cid, ip)
             mine = self.bridge.my_active_kinds(cid)
@@ -591,7 +598,7 @@ class _Handler(BaseHTTPRequestHandler):
                 name = str(j.get("name", "")).strip()[:32]
             except Exception:
                 pass
-            self.bridge.touch_client(cid, name, ip)
+            self._touch(cid, name, ip)
             self.send_response(200)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             if new_cookie:

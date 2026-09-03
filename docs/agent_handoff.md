@@ -1689,3 +1689,26 @@ Cookie 経路は元々 JS `writeCookie` が encodeURIComponent、サーバ
   リンク化 regex / オフスクリーンで ControlWindow 実構築（btnFsTop 同期、
   ログ行の pocoid: アンカー生成、hstretch 既定=モード1）。実機での
   ダイアログ操作・プロキシ越し XFF は未確認。
+
+
+### 追記 (2026-09-04) — JOIN がログに出ないバグ修正
+
+ユーザ報告「ログに JOIN でませんね」。原因: GET `/` と `/status` は
+`touch_client` を直接呼んでいて JOIN を出さない。JOIN を出すのは
+`_who()`（POST 系のみ）で、ページを開いた時点で登録が済んでしまうため
+初回 POST でも `is_new=False` → JOIN は一度も出なかった。
+
+- ハンドラに `_touch(cid, name, ip) -> label` を新設（touch_client +
+  初見なら JOIN ログ）。`_who` / GET `/` / GET `/status` / POST `/name`
+  すべてこれ経由に統一。GET `/` は ip も `_identity()` の XFF 対応値を
+  使うように（旧: 生 socket peer）。
+- 検証（scratchpad/join_test.py）: `run_in_thread` で実サーバを立てて
+  urllib で実リクエスト — 初回 GET / で JOIN 1 回（XFF の実 IP 付き）、
+  同一 cookie の再アクセス・/status では重複なし、cookie なし新規は
+  socket IP で JOIN、/status が初リクエストでも JOIN。→ **XFF 対応も
+  アプリ側は end-to-end で動作確認済み**（残る未確認は pegasus の
+  nginx が X-Forwarded-For を付けているかだけ。ssh pegasus は公開鍵
+  拒否で非対話ログイン不可、ユーザに `! ssh pegasus "grep -rn
+  'X-Forwarded-For\|proxy_pass' /etc/nginx"` を依頼中）。
+- 注意: JOIN はアプリ起動中に「初めて見た cookie ID」ごとに 1 回。
+  再起動すればレジストリが空になるので同じ人でもまた JOIN が出る。
