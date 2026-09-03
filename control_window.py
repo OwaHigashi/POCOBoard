@@ -8,14 +8,16 @@ rest of the UI.
 """
 from __future__ import annotations
 import os
+import re
 import socket
 
 from PySide6.QtCore    import Qt, QTimer, Signal, Slot
 from PySide6.QtGui     import QFont, QGuiApplication
 from PySide6.QtWidgets import (
     QApplication, QAbstractScrollArea, QComboBox, QFileDialog,
-    QFrame, QGridLayout, QGroupBox, QHBoxLayout, QLabel, QPushButton,
-    QScrollArea, QSlider, QSpinBox, QTabWidget, QTextEdit, QVBoxLayout, QWidget,
+    QFrame, QGridLayout, QGroupBox, QHBoxLayout, QLabel, QMessageBox,
+    QPushButton, QScrollArea, QSlider, QSpinBox, QTabWidget, QTextBrowser,
+    QTextEdit, QVBoxLayout, QWidget,
 )
 
 from audio        import AudioEngine
@@ -416,7 +418,9 @@ class _UserRow(QWidget):
 
         name = client_info.get("name") or ""
         short = self._client_id[:8]
-        label_text = f"{name}  (#{short})" if name else f"#{short}"
+        self._ip = client_info.get("ip", "")
+        base = f"{name}  (#{short})" if name else f"#{short}"
+        label_text = f"{base}   {self._ip}" if self._ip else base
         lbl = QLabel(label_text)
         lbl.setToolTip(f"IP: {client_info.get('ip','?')}\nID: {self._client_id}")
         lbl.setObjectName("userLabel")
@@ -432,6 +436,19 @@ class _UserRow(QWidget):
         self.btn.clicked.connect(self._on_toggled)
         row.addWidget(self.btn)
 
+        # Per-IP block — survives cookie resets (private mode / in-app
+        # browsers hand the same person a fresh id each visit).
+        self.btnIp = QPushButton()
+        self.btnIp.setCheckable(True)
+        self.btnIp.setChecked(bool(client_info.get("ip_blocked")))
+        self.btnIp.setEnabled(bool(self._ip))
+        self.btnIp.setFixedWidth(96)
+        self.btnIp.setFixedHeight(30)
+        self.btnIp.setToolTip("この IP からの全リクエストを拒否 / 許可")
+        self._apply_ip_btn_style()
+        self.btnIp.clicked.connect(self._on_ip_toggled)
+        row.addWidget(self.btnIp)
+
     def _apply_btn_style(self) -> None:
         if self.btn.isChecked():
             self.btn.setText("🚫 拒否中")
@@ -444,6 +461,19 @@ class _UserRow(QWidget):
     def _on_toggled(self, checked: bool) -> None:
         self._bridge.set_blocked(self._client_id, checked)
         self._apply_btn_style()
+
+    def _apply_ip_btn_style(self) -> None:
+        if self.btnIp.isChecked():
+            self.btnIp.setText("IP 🚫")
+            self.btnIp.setProperty("class", "toggleOff")
+        else:
+            self.btnIp.setText("IP ✓")
+            self.btnIp.setProperty("class", "toggleOn")
+        _repolish(self.btnIp)
+
+    def _on_ip_toggled(self, checked: bool) -> None:
+        self._bridge.set_ip_blocked(self._ip, checked)
+        self._apply_ip_btn_style()
 
 
 # ============================================================
@@ -569,6 +599,15 @@ class ControlWindow(QWidget):
         title.setFont(tf)
         header.addWidget(title)
         header.addStretch(1)
+        self.btnFsTop = QPushButton("🖥 全画面表示")
+        self.btnFsTop.setCheckable(True)
+        self.btnFsTop.setMinimumWidth(140)
+        self.btnFsTop.setMinimumHeight(34)
+        self.btnFsTop.setToolTip(
+            "表示ウィンドウの全画面 ON/OFF（表示タブのボタンと同じ）")
+        self.btnFsTop.clicked.connect(self._on_fs_toggled)
+        header.addWidget(self.btnFsTop)
+
         self.btnAccept = QPushButton("ACCEPT")
         self.btnAccept.setProperty("class", "toggleOn")
         self.btnAccept.setCheckable(True)
@@ -1528,8 +1567,13 @@ class ControlWindow(QWidget):
         ll = QVBoxLayout(w)
         ll.setContentsMargins(10, 12, 10, 10)
         ll.setSpacing(6)
-        self.logView = QTextEdit()
+        # QTextBrowser (not QTextEdit) so #id anchors are clickable —
+        # clicking one opens the block / IP-block dialog for that user.
+        self.logView = QTextBrowser()
         self.logView.setReadOnly(True)
+        self.logView.setOpenLinks(False)
+        self.logView.setOpenExternalLinks(False)
+        self.logView.anchorClicked.connect(self._on_log_anchor)
         self.logView.setLineWrapMode(QTextEdit.LineWrapMode.NoWrap)
         self.logView.setStyleSheet(
             "QTextEdit { background: #fffdfa; color: #433d37; "
@@ -1538,6 +1582,9 @@ class ControlWindow(QWidget):
         )
         ll.addWidget(self.logView, stretch=1)
         row = QHBoxLayout()
+        hintL = QLabel("ID (#xxxxxxxx) をクリックすると ブロック / IP ブロック 操作ができます")
+        hintL.setProperty("class", "small")
+        row.addWidget(hintL)
         row.addStretch(1)
         self.btnLogClear = QPushButton("ログ消去")
         self.btnLogClear.clicked.connect(self.logView.clear)
@@ -1607,6 +1654,13 @@ class ControlWindow(QWidget):
                     .replace("<", "&lt;")
                     .replace(">", "&gt;")
                     .replace("  ", "&nbsp;&nbsp;"))
+        # Linkify client ids (#a1b2c3d4) so the operator can click one to
+        # open the block dialog — works even after the sender's row has
+        # scrolled out of the ユーザー tab.
+        safe = re.sub(
+            r"#([0-9a-f]{6,16})\b",
+            r'<a href="pocoid:\1" style="color:inherit;">#\1</a>',
+            safe)
         # Early callers (e.g. piano-box MIDI auto-connect during _build_ui)
         # can fire before _build_log_tab has created self.logView. Buffer
         # those lines and flush them when the log tab is built.
@@ -1631,6 +1685,54 @@ class ControlWindow(QWidget):
         now = _time.strftime("%H:%M:%S")
         line = f"{now}  LOCAL                     {kind:<10s}{details}"
         self.on_request_logged(kind, line)
+
+    # ---------------- log-click block dialog ----------------
+    def _on_log_anchor(self, url) -> None:
+        if url.scheme() != "pocoid":
+            return
+        prefix = url.path().lower()
+        client = next((c for c in self.bridge.list_clients()
+                       if c["id"].startswith(prefix)), None)
+        if client is None:
+            QMessageBox.information(
+                self, "ユーザー操作",
+                f"#{prefix} は現在の接続一覧に見つかりません。")
+            return
+        self._show_client_dialog(client)
+
+    def _show_client_dialog(self, client: dict) -> None:
+        name = client.get("name") or "(名前未設定)"
+        ip = client.get("ip") or ""
+        blocked = bool(client.get("blocked"))
+        ip_blocked = bool(client.get("ip_blocked"))
+        box = QMessageBox(self)
+        box.setWindowTitle("ユーザー操作")
+        box.setText(
+            f"名前: {name}\n"
+            f"ID:  #{client['id'][:8]}\n"
+            f"IP:  {ip or '?'}\n\n"
+            f"ID 状態: {'🚫 拒否中' if blocked else '✓ 許可中'}\n"
+            f"IP 状態: {'🚫 拒否中' if ip_blocked else '✓ 許可中'}")
+        btn_id = box.addButton(
+            "ID を許可に戻す" if blocked else "この ID をブロック",
+            QMessageBox.ButtonRole.ActionRole)
+        btn_ip = None
+        if ip:
+            btn_ip = box.addButton(
+                "IP を許可に戻す" if ip_blocked else "この IP をブロック",
+                QMessageBox.ButtonRole.ActionRole)
+        box.addButton("閉じる", QMessageBox.ButtonRole.RejectRole)
+        box.exec()
+        clicked = box.clickedButton()
+        if clicked is btn_id:
+            self.bridge.set_blocked(client["id"], not blocked)
+            self._log_local(
+                "ADMIN",
+                f"{'ID許可' if blocked else 'IDブロック'} {name} #{client['id'][:8]}")
+        elif btn_ip is not None and clicked is btn_ip:
+            self.bridge.set_ip_blocked(ip, not ip_blocked)
+            self._log_local(
+                "ADMIN", f"{'IP許可' if ip_blocked else 'IPブロック'} {ip}")
 
     # ---------------- user list ----------------
     @Slot()
@@ -1981,6 +2083,19 @@ class ControlWindow(QWidget):
             self.display.showFullScreen()
         elif not checked and self.display.isFullScreen():
             self.display.showNormal()
-        self.btnFullscreen.setText(
-            "全画面解除 (F11)" if self.display.isFullScreen() else "フルスクリーン (F11)"
-        )
+        self.set_fullscreen_ui(self.display.isFullScreen())
+
+    def set_fullscreen_ui(self, on: bool) -> None:
+        """Sync both fullscreen toggles (header + 表示 tab) to `on`."""
+        for btn, t_on, t_off in (
+            (getattr(self, "btnFullscreen", None),
+             "全画面解除 (F11)", "フルスクリーン (F11)"),
+            (getattr(self, "btnFsTop", None),
+             "🖥 全画面解除", "🖥 全画面表示"),
+        ):
+            if btn is None:
+                continue
+            btn.blockSignals(True)
+            btn.setChecked(on)
+            btn.setText(t_on if on else t_off)
+            btn.blockSignals(False)

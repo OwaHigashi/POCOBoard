@@ -15,7 +15,9 @@ Endpoints:
 
 Every request is identified by a `poco_client` cookie (16-hex random string
 set on first visit).  Per-client `blocked` flag gates FX / marquee / talk /
-upload: blocked clients get 403 `blocked`.  Separate global `accept=false`
+upload: blocked clients get 403 `blocked`.  Blocking can also be per-IP
+(the client IP honours X-Forwarded-For, so it works behind the reverse
+proxy too — cookie resets can't dodge an IP block).  Separate global `accept=false`
 returns 503 `disabled`.
 """
 from __future__ import annotations
@@ -104,6 +106,9 @@ class WebBridge(QObject):
         self._piano_mode = False
         # Known clients — client_id -> {name, last_seen_ms, ip, blocked}
         self._clients: dict[str, dict] = {}
+        # IPs blocked outright (operator action).  Checked alongside the
+        # per-cookie flag; survives the client getting a fresh cookie id.
+        self._blocked_ips: set[str] = set()
         self._last_talk_log: dict[str, float] = {}
         self._marquee_lanes_used = 0
         self._marquee_lanes_max  = 0
@@ -240,6 +245,7 @@ class WebBridge(QObject):
                     "name":    rec.get("name", ""),
                     "ip":      rec.get("ip", ""),
                     "blocked": bool(rec.get("blocked", False)),
+                    "ip_blocked": rec.get("ip", "") in self._blocked_ips,
                     "idle_ms": int(now_ms - last_ms),
                     "first_seen_ms": rec.get("first_seen_ms", 0),
                 })
@@ -247,15 +253,32 @@ class WebBridge(QObject):
         out.sort(key=lambda c: c["first_seen_ms"], reverse=True)
         return out
 
-    def is_allowed(self, client_id: str) -> tuple[bool, str]:
+    def is_allowed(self, client_id: str, ip: str = "") -> tuple[bool, str]:
         """Returns (allowed, reason). reason ∈ {'ok','disabled','blocked'}."""
         with self._lock:
             if not self._accept:
                 return False, "disabled"
+            if ip and ip in self._blocked_ips:
+                return False, "blocked"
             rec = self._clients.get(client_id)
             if rec is not None and rec.get("blocked"):
                 return False, "blocked"
         return True, "ok"
+
+    def set_ip_blocked(self, ip: str, blocked: bool) -> None:
+        ip = (ip or "").strip()
+        if not ip:
+            return
+        with self._lock:
+            if blocked:
+                self._blocked_ips.add(ip)
+            else:
+                self._blocked_ips.discard(ip)
+        self.clientsChanged.emit()
+
+    def is_ip_blocked(self, ip: str) -> bool:
+        with self._lock:
+            return ip in self._blocked_ips
 
     def set_blocked(self, client_id: str, blocked: bool) -> None:
         with self._lock:
@@ -274,6 +297,7 @@ class WebBridge(QObject):
         with self._lock:
             for rec in self._clients.values():
                 rec["blocked"] = False
+            self._blocked_ips.clear()
         self.clientsChanged.emit()
 
     def forget_client(self, client_id: str) -> None:
@@ -362,6 +386,13 @@ class _Handler(BaseHTTPRequestHandler):
         if len(name) > 32:
             name = name[:32]
         ip = self.client_address[0] if self.client_address else "?"
+        # Behind the reverse proxy every socket peer is the proxy itself;
+        # the real client IP travels in X-Forwarded-For (first hop).
+        fwd = self.headers.get("X-Forwarded-For", "")
+        if fwd:
+            first = fwd.split(",")[0].strip()
+            if first:
+                ip = first
         return cid, name, ip, new_cookie
 
     def _set_identity_cookie(self, cid: str) -> None:
@@ -503,7 +534,7 @@ class _Handler(BaseHTTPRequestHandler):
             cid, name, ip, new_cookie = self._identity()
             self.bridge.touch_client(cid, name, ip)
             snap = self.bridge.snapshot()
-            allowed, _ = self.bridge.is_allowed(cid)
+            allowed, _ = self.bridge.is_allowed(cid, ip)
             mine = self.bridge.my_active_kinds(cid)
             self._send_json(200, {
                 "accept":  snap["accept"],
@@ -523,11 +554,12 @@ class _Handler(BaseHTTPRequestHandler):
         self._send_json(404, {"ok": False, "reason": "not_found"})
 
     # ===== POST =====
-    def _reject_if_not_allowed(self, cid: str, label: str, log_tag: str,
+    def _reject_if_not_allowed(self, cid: str, label: str, ip: str,
+                               log_tag: str,
                                new_cookie: Optional[str]) -> bool:
         """Write 503/403 + log if this client may not act. Returns True when
         the request was rejected (caller should just return)."""
-        allowed, reason = self.bridge.is_allowed(cid)
+        allowed, reason = self.bridge.is_allowed(cid, ip)
         if allowed:
             return False
         now_hms = time.strftime("%H:%M:%S")
@@ -597,7 +629,7 @@ class _Handler(BaseHTTPRequestHandler):
         if path in fx_paths:
             cid, label, ip, new_cookie = self._who()
             kind, log_tag = fx_paths[path]
-            if self._reject_if_not_allowed(cid, label, log_tag, new_cookie):
+            if self._reject_if_not_allowed(cid, label, ip, log_tag, new_cookie):
                 return
             if not self.bridge.fx_try_acquire(now_ms):
                 self.bridge.emit_log(log_tag, f"{now_hms}  {label:24s}  {log_tag:<9s}  X busy (debounced)")
@@ -610,7 +642,7 @@ class _Handler(BaseHTTPRequestHandler):
 
         if path == "/talk":
             cid, label, ip, new_cookie = self._who()
-            if self._reject_if_not_allowed(cid, label, "TALK", new_cookie):
+            if self._reject_if_not_allowed(cid, label, ip, "TALK", new_cookie):
                 return
             data = self._read_body(256 * 1024)   # generous — reverse proxies can pad
             if not data:
@@ -648,7 +680,7 @@ class _Handler(BaseHTTPRequestHandler):
 
         if path == "/marquee":
             cid, label, ip, new_cookie = self._who()
-            if self._reject_if_not_allowed(cid, label, "MARQUEE", new_cookie):
+            if self._reject_if_not_allowed(cid, label, ip, "MARQUEE", new_cookie):
                 return
             body = self._read_body(16 * 1024)
             if not body:
@@ -713,7 +745,7 @@ class _Handler(BaseHTTPRequestHandler):
 
         if path == "/upload":
             cid, label, ip, new_cookie = self._who()
-            if self._reject_if_not_allowed(cid, label, "UPLOAD", new_cookie):
+            if self._reject_if_not_allowed(cid, label, ip, "UPLOAD", new_cookie):
                 return
             kind = (query.get("type", [""])[0] or "").lower()
             if kind not in self.bridge.upload_limits:

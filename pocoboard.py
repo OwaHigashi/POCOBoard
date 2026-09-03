@@ -131,8 +131,9 @@ def main() -> int:
     # (output_hstretch_pctN: FX / marquee / piano roll / photos /
     # videos).  Preset 1 = 100 % (no correction), preset 2 = 297 % (the
     # deploy rig's calibration, 2026-08-06).  hstretch_mode picks which
-    # preset is active at boot; the operator flips them with the
-    # 横補正モード buttons on the 表示 tab.  The legacy single-value keys
+    # preset is active at boot (default 1 = no correction; the deploy
+    # rig sets hstretch_mode=2 in config.ini); the operator flips them
+    # with the 横補正モード buttons on the 表示 tab.  The legacy single-value keys
     # (camera_hstretch_pct / output_hstretch_pct) still seed preset 2.
     camera_hstretch1 = cfg.get_int("camera_hstretch_pct1", 100)
     output_hstretch1 = cfg.get_int("output_hstretch_pct1", 100)
@@ -140,7 +141,7 @@ def main() -> int:
                                    cfg.get_int("camera_hstretch_pct", 297))
     output_hstretch2 = cfg.get_int("output_hstretch_pct2",
                                    cfg.get_int("output_hstretch_pct", 297))
-    hstretch_mode    = cfg.get_int("hstretch_mode", 2)
+    hstretch_mode    = cfg.get_int("hstretch_mode", 1)
     piano_pps     = cfg.get_int("piano_scroll_pps", 110)
     piano_fx_op   = cfg.get_int("piano_fx_opacity_pct", 55)
     piano_roll_op = cfg.get_int("piano_roll_opacity_pct", 65)
@@ -243,7 +244,7 @@ def main() -> int:
     display.set_hstretch_preset(
         2, max(50, min(400, camera_hstretch2)) / 100.0,
         max(100, min(400, output_hstretch2)) / 100.0)
-    display.set_hstretch_mode(2 if hstretch_mode != 1 else 1)
+    display.set_hstretch_mode(2 if hstretch_mode == 2 else 1)
     if camera_device:
         display.set_camera_device(camera_device)
     display.set_camera_mode(camera_on_boot)
@@ -283,8 +284,7 @@ def main() -> int:
     ctrl.set_initial_accept(accept_on_boot)
     ctrl.set_selected_screen(disp_screen)
     if fs_default:
-        ctrl.btnFullscreen.setChecked(True)
-        ctrl.btnFullscreen.setText("全画面解除 (F11)")
+        ctrl.set_fullscreen_ui(True)
 
     # Anchor control window on the chosen control screen, centered.
     # If the window is taller than the available area (small monitor +

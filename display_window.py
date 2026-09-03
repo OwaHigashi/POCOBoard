@@ -237,7 +237,7 @@ class DisplayWindow(QWidget):
         # correction as the drawn layers (the chain has one squeeze, at
         # the output; an earlier camera-is-squeezed-twice model predicted
         # camera = drawn^2 and did not survive the rig test).
-        self._camera_hstretch: float = 2.97
+        self._camera_hstretch: float = 1.0
 
         # --- output horizontal correction for the DRAWN layers ---
         # The output signal goes through one downstream horizontal
@@ -255,7 +255,7 @@ class DisplayWindow(QWidget):
         # keyboard lays out all 88 keys across the virtual width so the
         # full keyboard spans the final screen.  1.0 = off.  Config
         # output_hstretch_pct, shipped default 297.
-        self._output_hstretch: float = 2.97
+        self._output_hstretch: float = 1.0
         # Two switchable presets of (camera_hstretch, output_hstretch):
         # preset 1 = no correction (100 %), preset 2 = the rig's 297 %.
         # Editing either spinbox on the control window rewrites the
@@ -264,7 +264,9 @@ class DisplayWindow(QWidget):
             1: (1.0, 1.0),
             2: (2.97, 2.97),
         }
-        self._hstretch_mode: int = 2
+        # Boot default = preset 1 (補正なし); config hstretch_mode=2
+        # switches the rig back to the calibrated 297 %.
+        self._hstretch_mode: int = 1
 
     # ---------- activity tracking ----------
     def _mark_activity(self) -> None:

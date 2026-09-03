@@ -1640,3 +1640,52 @@ Cookie 経路は元々 JS `writeCookie` が encodeURIComponent、サーバ
 - 検証: オフスクリーンで 7 s 分 update/draw（例外なし）とプレビュー
   画像で虹・音符の見た目を確認。実機での色味・音量は要確認。
 
+
+
+### 追記 (2026-09-03) — 横補正の既定を 100% に / ヘッダ全画面ボタン / ログから直接ブロック / IP ブロック (X-Forwarded-For)
+
+ユーザ要望 4 点 + ID/IP の質問。
+
+- **横補正の起動既定 = モード 1 (100 % / 補正なし)**。`pocoboard.py`
+  `cfg.get_int("hstretch_mode", 1)`、`display_window.py` の
+  `_hstretch_mode` / `_camera_hstretch` / `_output_hstretch` 初期値も
+  1 / 1.0 / 1.0 に。**実機の config.ini に `hstretch_mode = 2` が
+  書いてあれば従来どおり 297 % で起動する**（config が既定に勝つ）。
+  config.example.ini / README も既定 1 に更新。
+- **ヘッダ右上に 🖥 全画面表示トグル**（ACCEPT / システム終了の並び）。
+  表示タブの既存フルスクリーンボタンと `set_fullscreen_ui(on)` で相互
+  同期（blockSignals で再入なし）。pocoboard.py の起動時 fullscreen
+  反映も直接 btnFullscreen をいじる 2 行から `ctrl.set_fullscreen_ui(True)`
+  へ変更。
+- **ログの送信者表示とクリックブロック**: ログ行は元々 label
+  (`名前 (#id8)`) を含む。`logView` を QTextEdit → **QTextBrowser** に
+  変え (`setOpenLinks(False)` + `anchorClicked`)、`on_request_logged` で
+  `#([0-9a-f]{6,16})\b` を `<a href="pocoid:xxx">` にリンク化。クリックで
+  `_show_client_dialog`（QMessageBox: 名前 / ID / IP / 状態表示、
+  「この ID をブロック」「この IP をブロック」ボタン、状態に応じ解除に
+  変化）。ID→クライアント解決は list_clients() の前方一致。色 span は
+  リンク化の後に巻くので色コード #xxxxxx は誤リンクしない。
+- **IP ベースのブロック**: WebBridge に `_blocked_ips: set[str]`、
+  `set_ip_blocked` / `is_ip_blocked`。`is_allowed(cid, ip="")` が IP も
+  見る（`_reject_if_not_allowed` に ip 引数追加、fx/talk/marquee/upload
+  の 4 call site と /status を更新）。`allow_all` (全員を許可) は IP
+  ブロックも解除。`list_clients()` に `ip_blocked` を追加。ユーザータブの
+  各行に `IP ✓ / IP 🚫` トグル (幅 96) を追加、行ラベルに IP も表示。
+- **クライアント IP は X-Forwarded-For を優先**（`_identity`: 先頭ホップ、
+  無ければ従来どおり socket peer）。リバースプロキシ (nginx →
+  10.1.4.20:8080) 越しでも実クライアント IP が出る。nginx 側に
+  `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;` が
+  必要（標準的な設定なら大抵入っている）。LAN 直アクセスのクライアントが
+  ヘッダを偽装すれば IP を詐称できるが、パーティ用途では許容。
+- **ID が人単位で増える件（ユーザの質問への回答）**: `poco_client` cookie
+  は Max-Age=1 年の永続 cookie なので**ブラウザ再起動では変わらない**。
+  増える原因は (a) LINE/Twitter 等アプリ内ブラウザと Safari/Chrome で
+  cookie jar が別、(b) プライベートブラウズ（終了ごとに消える）、
+  (c) LAN 直 (`http://10.1.4.20:8080`) とプロキシ (`https://www.west.yokohama/po/`)
+  はオリジンが別なので cookie も別、(d) 端末が複数。→ だから IP ブロックを
+  併設した。
+- 検証: py_compile 全対象 / WebBridge 単体（ID・IP ブロック、allow_all
+  解除、list_clients の ip_blocked）/ `_identity` の XFF スタブテスト /
+  リンク化 regex / オフスクリーンで ControlWindow 実構築（btnFsTop 同期、
+  ログ行の pocoid: アンカー生成、hstretch 既定=モード1）。実機での
+  ダイアログ操作・プロキシ越し XFF は未確認。
