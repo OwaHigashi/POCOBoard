@@ -162,7 +162,7 @@ http://192.168.1.23:8080/
 - 全画面切替（ヘッダ右上の `🖥 全画面表示` と連動）
 - ローカル画像 / 動画 / 音声ファイルの再生
 - 画像表示秒数の調整
-- 📷 カメラ表示 (USB / 仮想カメラ) — **既定で ON**
+- 📷 カメラ表示 (USB / 仮想カメラ) — **既定で OFF**（config `camera_on_boot = true` で起動時 ON）
   - USB カメラや ManyCam・OBS などの仮想カメラの映像を待受背景として表示します。
     DirectShow にのみ登録される仮想カメラ（ManyCam Virtual Webcam /
     OBS Virtual Camera 等）は Windows Media Foundation からは見えませんが、
@@ -431,7 +431,7 @@ image_display_sec  = 180
 media_min_play_sec = 60
 
 # ---- Live camera (USB / 仮想カメラ) ----
-camera_on_boot = true         ; カメラ待受モード（既定 ON）
+camera_on_boot = false        ; カメラ待受モード（既定 OFF）
 camera_device  =              ; 空=既定カメラ / 名前の部分一致で選択 (例: OBS)
 camera_fx_opacity_pct      = 55   ; カメラ表示中のエフェクト不透明度 (0..100)
 camera_marquee_opacity_pct = 75   ; カメラ表示中の流れる文字の不透明度 (0..100)

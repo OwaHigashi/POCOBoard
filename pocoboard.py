@@ -119,7 +119,7 @@ def main() -> int:
     # Live camera (USB / virtual camera) — ON by default: the camera feed
     # is the standard idle background, with FX / marquee overlaid
     # semi-transparently while it is visible.
-    camera_on_boot = cfg.get_bool("camera_on_boot", True)
+    camera_on_boot = cfg.get_bool("camera_on_boot", False)
     camera_device  = cfg.get_str("camera_device", "")
     camera_fx_op   = cfg.get_int("camera_fx_opacity_pct", 55)
     camera_mq_op   = cfg.get_int("camera_marquee_opacity_pct", 75)

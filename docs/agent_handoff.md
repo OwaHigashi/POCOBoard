@@ -1731,3 +1731,12 @@ Cookie 経路は元々 JS `writeCookie` が encodeURIComponent、サーバ
   padding 16px 12px→9px 12px（モバイル媒体クエリも 12px→9px）。
 - 検証: INDEX_HTML 構造チェック（fx→talkBox→uploadBox の順、btnTalk
   一意）。実機ブラウザでの見た目は要確認。
+
+
+### 追記 (同日) — カメラ待受の起動既定を OFF に
+
+- `pocoboard.py` `cfg.get_bool("camera_on_boot", False)`（旧 True）。
+  config.example.ini / README も更新。`display_window._camera_mode` の
+  内部初期値はもともと False なので変更なし。
+- 実機の config.ini に `camera_on_boot = true` が書いてあればそちらが
+  勝って従来どおり ON で起動する点に注意（横補正モードと同じ扱い）。
