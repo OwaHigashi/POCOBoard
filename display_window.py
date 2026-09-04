@@ -27,6 +27,7 @@ from PySide6.QtWidgets    import QWidget
 
 from animations import ImageScene, PianoRollScene, Scene, make_scene
 from marquee    import MarqueeEngine
+from comment_feed import CommentFeed
 
 # DirectShow fallback for cameras invisible to Qt/Media Foundation
 # (ManyCam Virtual Webcam, OBS Virtual Camera, ...).  Pure ctypes COM —
@@ -43,6 +44,9 @@ class DisplayWindow(QWidget):
     """Full-area canvas. Fullscreen-capable; no decorations when fullscreen."""
 
     marqueeStatusChanged = Signal(int, int)   # (used, max)
+    # COMMENT mode (おわくさ AI feed): buffer size changed / text mode flipped
+    commentCountChanged = Signal(int)
+    textModeChanged     = Signal(str)         # 'marquee' | 'comment'
     # Emitted whenever the "owner" (uploader client_id) of a currently
     # visible media slot changes.  args = (kind, owner_cid_or_empty)
     # kind ∈ {'image', 'video'}.  Lets WebBridge know who is allowed to
@@ -70,6 +74,11 @@ class DisplayWindow(QWidget):
 
         self._scene: Optional[Scene] = None
         self._marquee = MarqueeEngine(marquee_font)
+        # Upward-scrolling comment feed (COMMENT mode).  Shares the marquee
+        # base font; its own scale = config comment_size_pct.
+        self._feed = CommentFeed(marquee_font)
+        self._text_mode: str = "marquee"
+        self._last_feed_count: int = 0
         self._last_ns = time.perf_counter_ns()
         self._cursor_hidden = False
         self._status_text_cb = status_text_cb    # () -> str|None, for the idle footer
@@ -402,6 +411,83 @@ class DisplayWindow(QWidget):
         self._marquee.stop_all()
         self._emit_marquee_status()
         self._dirty = True
+
+    # ---------- COMMENT mode (upward feed) ----------
+    def text_mode(self) -> str:
+        return self._text_mode
+
+    @Slot(str)
+    def set_text_mode(self, mode: str) -> None:
+        """'marquee' = AI / operator text flies as Niconico lanes (legacy);
+        'comment' = it lands in the upward-scrolling feed.  Both layers
+        stay drawn — the mode only decides where *new* generic text goes."""
+        mode = "comment" if str(mode).lower().startswith("c") else "marquee"
+        if mode == self._text_mode:
+            return
+        self._text_mode = mode
+        self._dirty = True
+        self.textModeChanged.emit(mode)
+
+    @Slot(str, str, str)
+    def add_comment(self, text: str, who: str = "", kind: str = "text") -> str:
+        vw, _ = self._virtual_size()
+        res = self._feed.add(text, who=who, kind=kind, area_w=vw)
+        self._emit_comment_status()
+        self._mark_activity()
+        return res
+
+    @Slot()
+    def clear_comments(self) -> None:
+        self._feed.clear()
+        self._emit_comment_status()
+        self._dirty = True
+
+    def comment_count(self) -> int:
+        return self._feed.count()
+
+    def comment_scale(self) -> float:
+        return self._feed.scale
+
+    @Slot(float)
+    def set_comment_scale(self, scale: float) -> None:
+        """Feed text size (1.0 = marquee_size baseline, same convention as
+        set_marquee_scale).  Entries are re-wrapped, not cleared."""
+        self._feed.set_scale(float(scale))
+        self._dirty = True
+
+    def set_comment_max_entries(self, n: int) -> None:
+        self._feed.set_max_entries(int(n))
+        self._emit_comment_status()
+        self._dirty = True
+
+    def set_comment_ttl_sec(self, sec: float) -> None:
+        self._feed.set_ttl(float(sec))
+
+    def set_comment_bg_opacity(self, opacity: float) -> None:
+        self._feed.bg_alpha = max(0.0, min(1.0, float(opacity)))
+        self._dirty = True
+
+    def set_comment_layout(self, width_frac: float, bottom_frac: float,
+                           height_frac: float) -> None:
+        self._feed.width_frac  = max(0.2, min(1.0, float(width_frac)))
+        self._feed.bottom_frac = max(0.0, min(0.5, float(bottom_frac)))
+        self._feed.height_frac = max(0.1, min(1.0, float(height_frac)))
+        self._feed._layout_gen += 1
+        self._dirty = True
+
+    def set_comment_scroll_ms(self, ms: float) -> None:
+        self._feed.scroll_ms = max(0.0, float(ms))
+
+    def set_comment_show_time(self, on: bool) -> None:
+        self._feed.show_time = bool(on)
+        self._feed._layout_gen += 1
+        self._dirty = True
+
+    def _emit_comment_status(self) -> None:
+        n = self._feed.count()
+        if n != self._last_feed_count:
+            self._last_feed_count = n
+            self.commentCountChanged.emit(n)
 
     def _emit_marquee_status(self) -> None:
         # Emit only on change — this used to fire at 60 Hz while any
@@ -1162,6 +1248,10 @@ class DisplayWindow(QWidget):
             self._emit_marquee_status()
             if not self._marquee.tracks:
                 self._dirty = True   # last message left — erase it
+        if self._feed.entries:
+            if self._feed.step(dt_ms):
+                self._dirty = True
+            self._emit_comment_status()
 
         # DirectShow camera backend is pull-based: poll ~30 fps, and only
         # while the camera is actually visible (same occlusion rule as
@@ -1194,6 +1284,7 @@ class DisplayWindow(QWidget):
         animating = (self._scene is not None
                      or self._piano_scene is not None
                      or bool(self._marquee.tracks)
+                     or self._feed.animating
                      or (self._show_idle_title and self._title_fade < 1.0))
         if animating or self._dirty or self._frame_dirty:
             self._dirty = False
@@ -1384,6 +1475,18 @@ class DisplayWindow(QWidget):
             else:
                 self._marquee.draw(p, QRectF(0, 0, w, h))
             _vpop()
+
+        # COMMENT feed — same opacity rule as the marquee over the camera.
+        if self._feed.entries:
+            _vpush()
+            if camera_visible:
+                p.setOpacity(self._camera_marquee_opacity)
+                self._feed.draw(p, QRectF(0, 0, w, h))
+                p.setOpacity(1.0)
+            else:
+                self._feed.draw(p, QRectF(0, 0, w, h))
+            _vpop()
+            self._emit_comment_status()
 
     def _draw_video_frame(self, p: QPainter, w: int, h: int) -> None:
         self._draw_letterboxed(p, w, h, self._latest_video_image)

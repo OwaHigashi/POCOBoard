@@ -33,6 +33,10 @@ POCOBoard は、LAN 内のスマホや PC のブラウザから、配信中 PC �
   クライアントごとに `許可中 / 拒否中` を切り替えられます。
 - スクロールコメント
   色、サイズ、固定位置タグに対応しています。
+- COMMENT モード（おわくさ AI コメント応答）
+  文字表示を `MARQUEE`（横スクロール）/ `COMMENT`（画面下から上へ積み上がるフィード）で
+  切り替えられます。LAN 上の AI（POCOMon `scripts/owakusa.py`）が `POST /ai` で
+  返答を表示し、「画面消して」「◯◯という文字を流して」等の指示で画面バッファを操作します。
 - ローカル操作
   オペレーターがローカルファイルを直接再生できます。
 - リクエストログ
@@ -155,6 +159,25 @@ http://192.168.1.23:8080/
 - `MARQUEE STOP`
   流れている横スクロール文字を全て消します（以前はエフェクト欄にあった
   ボタン。エフェクトではないのでこのタブに移動）。
+- `文字表示モード` — タブ最上段の `MARQUEE (横スクロール)` / `COMMENT (AI コメント応答)`
+  トグル。`POST /ai` の `say`（おわくさの返答）と視聴者コメントを、どちらに出すかを決めます。
+  横スクロールのタグ・速度・サイズはモードに関係なく従来どおり使えます。
+  AI 側からも「おわくさ、コメントモードにして」で切り替わります。起動時のモードは
+  `config.ini` の `text_mode`（既定 `marquee`）。
+- `COMMENT モード (おわくさ AI フィード)` 欄
+  - `文字サイズ` 50〜500%（横スクロールと同じ基準。100% = `marquee_size`）。
+    横スクロールと違い、変更しても表示中の行は消えず、新しいサイズで折り返し直されます。
+    起動時の値は `comment_size_pct`（未指定なら `marquee_size_pct`）。
+  - `最大行数` — 画面に保持するエントリ数。超えた分は古い方から消えます（`comment_max_lines`）。
+  - `表示秒数` — 各行が自動で消えるまでの秒数。0 = 上に押し出されるまで残る（`comment_ttl_sec`）。
+  - `背景の濃さ` — 各行の後ろに敷く半透明の黒。カメラ映像の上でも読めるように（`comment_bg_pct`）。
+  - テスト入力 + `行を追加` — 本機からフィードに 1 行出します（`<r>` 等のタグ可）。
+  - `COMMENT CLEAR` — フィードの全行を消します（横スクロールは残ります）。
+  - 右上の `AI: 最終受信 hh:mm:ss` で、おわくさから最後に命令が届いた時刻が分かります。
+
+フィードは画面下端に新しい行が現れ、古い行が上へ滑って押し出される「上に向かって
+スクロールする」表示です。視聴者名はシアン、おわくさの返答は黄色の名前で色分けされ、
+行ごとに半透明の背景と影が付くのでカメラ映像や動画の上でも読めます。
 
 ### 表示タブ
 
@@ -368,6 +391,8 @@ http://<IP>:<port>/
 | POST | `/talk?sr=16000` | Int16 LE mono PCM | TALK 音声送信 |
 | POST | `/marquee?speed=1..5` | UTF-8 text | 横スクロール送信 |
 | POST | `/marquee/stop` | - | 横スクロール停止 |
+| POST | `/ai` | JSON（下記） | おわくさ AI の画面操作。`X-Poco-AI-Token` ヘッダ（`ai_token` 設定時） |
+| GET | `/ai/status` | - | `{mode, comment:{count,size_pct}, marquee:{used,size_pct}, last_ai_ms}` |
 | POST | `/name` | `{"name":"Alice"}` | 表示名保存 |
 | POST | `/upload?type=image|video|audio&filename=...` | raw binary | メディアアップロード |
 | POST | `/my/stop?kind=image|video|audio|all` | - | 自分のメディアだけ止める |
@@ -392,6 +417,45 @@ curl -X POST \
   --data-raw "<r>お知らせ</r> <big>19時から開始</big>" \
   "http://192.168.1.23:8080/marquee?speed=2"
 ```
+
+### `POST /ai` — おわくさ AI（画面バッファ操作）
+
+`POST /ai` は POCOMon 側の `scripts/owakusa.py` が使う操作口です。`ACCEPT` スイッチや
+クライアントのブロックの対象外（オペレーターの分身として扱う）で、代わりに
+`config.ini` の `ai_token` を設定すると同じ値を `X-Poco-AI-Token` ヘッダ（または
+`?token=`）で送った相手だけを受け付けます（空なら LAN 内なら誰でも可）。
+
+Body は 1 命令の JSON か、`{"cmds": [ ... ]}` で複数命令をまとめて（順に実行）。
+
+| `cmd` | 引数 | 動作 |
+|---|---|---|
+| `say` | `lines: [{who, text, kind}]`（または `who`/`text`/`kind`）, `speed` | **現在の文字表示モード**に出す。COMMENT ならフィード、MARQUEE なら横スクロール。`kind` = `viewer` / `ai` / `text` / `info`（名前の色） |
+| `comment` | `say` と同じ | モードに関わらずフィードに出す |
+| `marquee` | `text`, `speed` 1..5 | モードに関わらず横スクロールで流す（「◯◯という文字を流して」） |
+| `marquee_stop` | - | 横スクロールを止める |
+| `clear` | `target`: `all`(既定) / `comment` / `marquee` | 画面の文字を消す（「画面消して」） |
+| `mode` | `mode`: `marquee` / `comment` / `toggle` | 文字表示モード切替 |
+| `size` | `pct` 50..500 または `delta` ±, `target`: `comment` / `marquee` / `both`（省略時は現在モード） | 文字サイズ変更（制御画面のスピンボックスと連動） |
+| `fx` | `kind`: `bomb cheer hearts stars snow petals aurora laser sunset leaves notes rainbow` | エフェクト発火 |
+
+応答: `{"ok": true, "n": 実行数, "rejected": 無視した数, "mode": 現在モード}`。
+不正な命令のみなら `400 bad_cmd`、トークン不一致は `403 bad_token`。
+
+例:
+
+```bash
+# 視聴者コメント + おわくさの返答を現在モードに出す
+curl -X POST -H "Content-Type: application/json" --data-raw '{"cmds":[
+  {"cmd":"say","lines":[{"who":"まりりん","text":"こんばんわ","kind":"viewer"},
+                        {"who":"🤖 おわくさ","text":"こんばんわ〜！","kind":"ai"}]}]}' \
+  http://192.168.1.23:8080/ai
+
+# 「おわくさ、なにそれ、という文字を流して」 → 「おわくさ、画面消して」
+curl -X POST -H "Content-Type: application/json" --data-raw '{"cmd":"marquee","text":"なにそれ","speed":2}' http://192.168.1.23:8080/ai
+curl -X POST -H "Content-Type: application/json" --data-raw '{"cmd":"clear"}' http://192.168.1.23:8080/ai
+```
+
+すべての `/ai` 命令は ログタブに `AI` として記録されます。
 
 ---
 
@@ -461,6 +525,19 @@ marquee_size    = 64
 marquee_size_pct = 150     ; 全体スケール (50..500). 制御画面からも変更可
 marquee_scroll_pps = 320   ; 速度 1 のときの px/s (速度 1..5 で倍率)
 marquee_pin_sec = 3.0      ; <ue>/<shita> 固定表示の秒数
+
+# ---- COMMENT mode (おわくさ AI フィード) ----
+text_mode = marquee        ; 起動時の文字表示モード marquee / comment
+comment_size_pct = 150     ; フィード文字サイズ (50..500, 100 = marquee_size)。未指定なら marquee_size_pct
+comment_max_lines = 12     ; 画面に保持する行(エントリ)数
+comment_ttl_sec = 0        ; 各行の表示秒数 (0 = 上に押し出されるまで残す)
+comment_width_pct = 92     ; 行の最大幅 (画面幅 %)
+comment_bottom_pct = 4     ; 画面下端からの余白 (%)
+comment_height_pct = 90    ; フィードが使う高さの上限 (画面 %)
+comment_bg_pct = 45        ; 行の背景 (半透明の黒) の濃さ 0..100
+comment_scroll_ms = 350    ; 新着時に上へ滑るアニメの時間
+comment_show_time = false  ; 行頭に時刻 (HH:MM) を付ける
+;ai_token =                ; POST /ai の共有トークン。空なら LAN 内の誰でも AI 操作可
 ```
 
 起動時オプション:
