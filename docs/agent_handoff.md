@@ -1767,3 +1767,22 @@ Cookie 経路は元々 JS `writeCookie` が encodeURIComponent、サーバ
   開いたときの JOIN 行の IP がグローバル IP かどうかでも可
 - 新 UI（TALK コーナー・圧縮した余白・ログクリックのダイアログ）の
   実機での見た目・操作感
+
+
+### 2026-09-04 — 履歴の attribution 全消去（コード変更なし）
+
+ユーザーの強い要求により、GitHub の contributor が OwaHigashi 以外に
+見えないよう履歴を書き換えた。OwaHigashi 配下 35 repo を全履歴監査し、
+Claude トレーラー（Co-Authored-By / Generated with / Claude-Session）を
+9 repo・26 コミットから除去して force push（本 repo は 8 コミット）。
+author / committer は一切変更していない。ローカルの D:\M5 と
+C:\Users\west\M5 の各クローンも新履歴に付け替え済み。
+M5PaperSchedAL にローカルだけ残っていた「Hiro West <west@keio.jp>」名義
+（GitHub の hirowest に紐づく）のバックアップブランチ 2 本を削除。
+GitHub 上に hirowest は一度も出ていなかった。
+
+今後の絶対ルール: コミットメッセージに Claude / Anthropic / Claude-Session
+の行を入れない。各 repo で `git config user.email` が OwaHigashi で
+あることをコミット前に確認する（グローバルは Hiro West なので危険）。
+残っている「.claude/」の語はディレクトリパスの言及のみ（2 コミット、
+attribution ではない）。
