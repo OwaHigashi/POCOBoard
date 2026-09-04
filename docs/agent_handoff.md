@@ -1796,3 +1796,59 @@ pre-commit で Claude 語句と非 OwaHigashi identity を拒否、pre-push で�
 attribution{commit,pr,sessionUrl}=false に置換し PreToolUse ガードを追加、
 git は includeIf hasconfig で OwaHigashi リモートの repo は自動的に
 OwaHigashi identity、ローカル 69 クローンに明示設定済み。
+
+---
+
+## Session 2026-09-04 — COMMENT モード (おわくさ AI フィード) + `POST /ai`
+
+### 依頼
+POCOMon 側の AI (おわくさ, `scripts/responder.py` → 新 `scripts/owakusa.py`) の出力を
+POCOBoard で表示する。文字表示を **MARQUEE (従来) / COMMENT (AI 自動コメント応答)** の
+2 モードで切り替え、COMMENT は上に向かってスクロールするきれいな表示。文字サイズは
+MARQUEE と同じ指定 (%) で自由に。さらに「おわくさ、画面消して」「◯◯という文字を流して」
+のように、LLM 側から画面バッファを操作できること。
+
+### 実装
+- `comment_feed.py` (新規) — `CommentFeed`: 画面下端アンカーの上向きフィード。
+  エントリ = `who` + `text` (marquee と同じ `<r>` `<big>` 等のタグ可、位置タグは無視)。
+  新着で `_offset` を積み、指数減衰で古い行が上へ滑る。文字折り返しは 1 文字単位
+  (CJK) / 空白・句読点優先 (Latin)。行ごとに半透明の黒い角丸背景 + 文字影。
+  `max_entries` / `ttl_s` (0 = 押し出されるまで) / `scale` (marquee_size 基準の %)。
+  サイズ変更は再折り返しのみで**バッファは消えない** (marquee との違い)。
+- `display_window.py` — `_feed`、`_text_mode` ('marquee'|'comment')、
+  `set_text_mode` / `add_comment` / `clear_comments` / `set_comment_*`、
+  シグナル `textModeChanged(str)` / `commentCountChanged(int)`。paintEvent では
+  marquee の直後 (最前面) に描画、カメラ上では `camera_marquee_opacity` を共用。
+- `web_server.py` — `POST /ai` (JSON 1 命令 or `{"cmds":[...]}`)、`GET /ai/status`、
+  `/status` に `text_mode`。`_ai_normalize` でホワイトリスト + 文字数上限 (2000)。
+  `ai_token` (config) が空でなければ `X-Poco-AI-Token` / `?token=` を要求。ACCEPT /
+  ブロックの対象外 (オペレーターの分身)。`WebBridge.aiRequested(cid,label,ip,dict)`。
+  ログ種別 `AI`。
+- `control_window.py` — 横スクロールタブ最上段に MARQUEE / COMMENT トグル + `AI: 最終受信`。
+  `COMMENT モード` グループ (文字サイズ / 最大行数 / 表示秒数 / 背景の濃さ / テスト入力 /
+  COMMENT CLEAR)。`on_ai_command` が命令を実行: `say` は現在モードへ振り分け
+  (MARQUEE では `<c>名前</> 本文` / `<y>🤖 おわくさ</> 本文`)、`size` はスピンボックス経由
+  (ログ・bridge 同期のため)。ステータス行に `MODE | 流れ中 | フィード n 行`。
+- `pocoboard.py` / `config.example.ini` — `text_mode`, `comment_size_pct` (既定 =
+  `marquee_size_pct`), `comment_max_lines`, `comment_ttl_sec`, `comment_width_pct`,
+  `comment_bottom_pct`, `comment_height_pct`, `comment_bg_pct`, `comment_scroll_ms`,
+  `comment_show_time`, `ai_token`。
+
+### 検証 (whitewhale, Linux, PySide6 offscreen)
+- `py_compile` 全ファイル OK。
+- `QT_QPA_PLATFORM=offscreen` で起動 (`ctypes.WINFUNCTYPE` を CFUNCTYPE に差し替える
+  Linux シム経由。`midi_engine.py` は Windows 専用のまま)。`--port 18080`
+  (このホストでは 8080 を Open WebUI が使用)。
+- `/ai`: mode / say / size delta / marquee / fx / clear / toggle → 200。`bogus` /
+  `size` 引数なし → 400 bad_cmd、非 JSON → 400 bad_json。`/ai/status` が
+  mode / count / size_pct を反映。トークン: 未設定=誰でも、設定時は一致のみ。
+- `CommentFeed` を 1280x720 に描画して PNG 目視: 名前色分け・折り返し・タグ・背景板 OK。
+  TTL で消える / 最大行数で切り詰め / clear OK。
+- 実 LLM (Open WebUI → qwen3.6:35b) から `owakusa.py --ask` で marquee + clear が
+  順に届き、最後に say がフィードに残ることを確認。
+
+### 未検証 (実機 canary.west / Windows)
+- Windows での見た目 (Segoe UI Variable のメトリクス、影のオフセット)。
+- 横補正モード 2 (297 %) 下での折り返し幅 (仮想キャンバス幅で折り返すので理屈上は正しい)。
+- 配信 PC への配布: この変更はまだコミットしていない。canary.west 側で `git pull` 後、
+  `config.ini` に `text_mode` / `comment_*` / `ai_token` を追記 (無くても既定で動く)。

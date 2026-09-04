@@ -16,8 +16,8 @@ from PySide6.QtGui     import QFont, QGuiApplication
 from PySide6.QtWidgets import (
     QApplication, QAbstractScrollArea, QComboBox, QFileDialog,
     QFrame, QGridLayout, QGroupBox, QHBoxLayout, QLabel, QMessageBox,
-    QPushButton, QScrollArea, QSlider, QSpinBox, QTabWidget, QTextBrowser,
-    QTextEdit, QVBoxLayout, QWidget,
+    QLineEdit, QPushButton, QScrollArea, QSlider, QSpinBox, QTabWidget,
+    QTextBrowser, QTextEdit, QVBoxLayout, QWidget,
 )
 
 from audio        import AudioEngine
@@ -501,6 +501,11 @@ class ControlWindow(QWidget):
         # the display so the buttons + both spinboxes stay in sync even
         # when the switch originates elsewhere.
         self.display.hstretchModeChanged.connect(self._on_hstretch_mode_changed)
+        # MARQUEE / COMMENT text mode flips (operator buttons or the
+        # おわくさ AI via /ai) come back from the display so the buttons
+        # and the HTTP status stay in sync.
+        self.display.textModeChanged.connect(self._on_text_mode_changed)
+        self.display.commentCountChanged.connect(self.on_comment_changed)
 
         self.setWindowTitle("POCOBoard — Control")
         self.setStyleSheet(_QSS)
@@ -806,6 +811,29 @@ class ControlWindow(QWidget):
         ml.setSpacing(8)
         ml.setContentsMargins(10, 12, 10, 10)
 
+        # ---- text mode: MARQUEE (横スクロール) / COMMENT (AI 応答フィード) ----
+        mode_row = QHBoxLayout()
+        mode_row.setSpacing(6)
+        mode_row.addWidget(QLabel("文字表示モード:"))
+        self.btnModeMarquee = QPushButton("MARQUEE  (横スクロール)")
+        self.btnModeComment = QPushButton("COMMENT  (AI コメント応答)")
+        for b, mode in ((self.btnModeMarquee, "marquee"),
+                        (self.btnModeComment, "comment")):
+            b.setCheckable(True)
+            b.setMinimumHeight(34)
+            b.setToolTip(
+                "MARQUEE: 送られた文字はニコニコ風に横へ流れます (従来どおり)。\n"
+                "COMMENT: おわくさ (AI) の応答やコメントが画面下から上へ\n"
+                "積み上がるフィードに表示されます。\n"
+                "AI 側からも「おわくさ、コメントモードにして」等で切り替え可。")
+            b.clicked.connect(lambda _=False, m=mode: self._on_text_mode_clicked(m))
+            mode_row.addWidget(b)
+        mode_row.addStretch(1)
+        self.lblAiStatus = QLabel("AI: 未受信")
+        self.lblAiStatus.setProperty("class", "small")
+        mode_row.addWidget(self.lblAiStatus)
+        ml.addLayout(mode_row)
+
         self.mqEdit = QTextEdit()
         self.mqEdit.setPlaceholderText(
             "例: <r>おしらせ</r> <big>19時</big>から開始   "
@@ -871,6 +899,8 @@ class ControlWindow(QWidget):
         self.btnMqStop.clicked.connect(self._local_marquee_stop)
         row2.addWidget(self.btnMqStop)
         ml.addLayout(row2)
+
+        ml.addWidget(self._build_comment_box())
         ml.addStretch(1)
 
         hint = QLabel(
@@ -883,6 +913,87 @@ class ControlWindow(QWidget):
         hint.setWordWrap(True)
         ml.addWidget(hint)
         return w
+
+    def _build_comment_box(self) -> QWidget:
+        """COMMENT mode settings — the upward feed おわくさ writes to."""
+        box = QGroupBox("COMMENT モード (おわくさ AI フィード)")
+        g = QGridLayout(box)
+        g.setHorizontalSpacing(10)
+        g.setVerticalSpacing(8)
+
+        g.addWidget(QLabel("文字サイズ:"), 0, 0)
+        self.spCmScale = QSpinBox()
+        self.spCmScale.setRange(50, 500)
+        self.spCmScale.setSingleStep(10)
+        self.spCmScale.setSuffix(" %")
+        self.spCmScale.setMinimumHeight(30)
+        self.spCmScale.setValue(int(round(self.display.comment_scale() * 100)))
+        self.spCmScale.setToolTip(
+            "フィードの文字サイズ。横スクロールと同じ基準 (100% = config の marquee_size)。\n"
+            "変更しても表示中の行は消えず、新しいサイズで折り返し直されます。\n"
+            "config: comment_size_pct")
+        self.spCmScale.valueChanged.connect(self._on_comment_scale_changed)
+        g.addWidget(self.spCmScale, 0, 1)
+
+        g.addWidget(QLabel("最大行数:"), 0, 2)
+        self.spCmMax = QSpinBox()
+        self.spCmMax.setRange(1, 60)
+        self.spCmMax.setMinimumHeight(30)
+        self.spCmMax.setValue(self.display._feed.max_entries)
+        self.spCmMax.setToolTip("画面に保持するエントリ数。超えた分は古い方から消えます。\nconfig: comment_max_lines")
+        self.spCmMax.valueChanged.connect(self._on_comment_max_changed)
+        g.addWidget(self.spCmMax, 0, 3)
+
+        g.addWidget(QLabel("表示秒数:"), 1, 0)
+        self.spCmTtl = QSpinBox()
+        self.spCmTtl.setRange(0, 3600)
+        self.spCmTtl.setSuffix(" 秒")
+        self.spCmTtl.setSpecialValueText("押し出されるまで")
+        self.spCmTtl.setMinimumHeight(30)
+        self.spCmTtl.setValue(int(self.display._feed.ttl_s))
+        self.spCmTtl.setToolTip("各行が自動で消えるまでの秒数 (0 = 上に押し出されるまで残る)。\nconfig: comment_ttl_sec")
+        self.spCmTtl.valueChanged.connect(self._on_comment_ttl_changed)
+        g.addWidget(self.spCmTtl, 1, 1)
+
+        g.addWidget(QLabel("背景の濃さ:"), 1, 2)
+        self.spCmBg = QSpinBox()
+        self.spCmBg.setRange(0, 100)
+        self.spCmBg.setSingleStep(5)
+        self.spCmBg.setSuffix(" %")
+        self.spCmBg.setMinimumHeight(30)
+        self.spCmBg.setValue(int(round(self.display._feed.bg_alpha * 100)))
+        self.spCmBg.setToolTip("各行の後ろに敷く半透明の黒 (カメラ映像の上でも読めるように)。\nconfig: comment_bg_pct")
+        self.spCmBg.valueChanged.connect(self._on_comment_bg_changed)
+        g.addWidget(self.spCmBg, 1, 3)
+
+        row = QHBoxLayout()
+        self.cmEdit = QLineEdit()
+        self.cmEdit.setPlaceholderText("テスト入力: ここに書いて「行を追加」で本機からフィードに出せます (<r> 等のタグ可)")
+        self.cmEdit.setMinimumHeight(30)
+        self.cmEdit.returnPressed.connect(self._local_comment_send)
+        row.addWidget(self.cmEdit, stretch=1)
+        self.btnCmSend = QPushButton("行を追加")
+        self.btnCmSend.setProperty("class", "send")
+        self.btnCmSend.setMinimumHeight(32)
+        self.btnCmSend.clicked.connect(self._local_comment_send)
+        row.addWidget(self.btnCmSend)
+        self.btnCmClear = QPushButton("COMMENT CLEAR")
+        self.btnCmClear.setProperty("class", "stop")
+        self.btnCmClear.setToolTip("フィードの全行を消します (横スクロールは残ります)。")
+        self.btnCmClear.setMinimumHeight(32)
+        self.btnCmClear.clicked.connect(self._local_comment_clear)
+        row.addWidget(self.btnCmClear)
+        g.addLayout(row, 2, 0, 1, 4)
+
+        note = QLabel(
+            "おわくさ (whitewhale の scripts/owakusa.py) は HTTP の POST /ai でこの画面を操作します: "
+            "say / comment / marquee / clear / mode / size / fx。"
+            "config.ini の ai_token を設定すると、同じトークンを持つ相手だけ受け付けます。")
+        note.setProperty("class", "small")
+        note.setWordWrap(True)
+        g.addWidget(note, 3, 0, 1, 4)
+        self._refresh_text_mode_ui()
+        return box
 
     # ---- tab: display window controls ----
     def _build_display_tab(self) -> QWidget:
@@ -1618,13 +1729,142 @@ class ControlWindow(QWidget):
         snap = self.bridge.snapshot()
         used = snap["marquee_used"]
         clients = snap["clients"]
+        mode = self.display.text_mode().upper()
+        n_cm = self.display.comment_count()
         self.lblMq.setText(
-            f"メッセージ {used} 件流れ中   /   接続中クライアント: {clients}"
+            f"{mode}  |  メッセージ {used} 件流れ中  /  フィード {n_cm} 行"
+            f"  /  接続中クライアント: {clients}"
         )
 
     @Slot(int, int)
     def on_marquee_changed(self, used: int, total: int) -> None:
         self.bridge.set_marquee_status(used, total)
+
+    @Slot(int)
+    def on_comment_changed(self, count: int) -> None:
+        self.bridge.set_comment_status(count)
+
+    # ---------------- text mode (MARQUEE / COMMENT) ----------------
+    def _refresh_text_mode_ui(self) -> None:
+        if not hasattr(self, "btnModeMarquee"):
+            return
+        mode = self.display.text_mode()
+        for b, m in ((self.btnModeMarquee, "marquee"), (self.btnModeComment, "comment")):
+            b.blockSignals(True)
+            b.setChecked(m == mode)
+            b.blockSignals(False)
+            b.setProperty("class", "toggleOn" if m == mode else "toggleOff")
+            _repolish(b)
+        self._push_text_scales()
+
+    def _push_text_scales(self) -> None:
+        self.bridge.set_text_scales(int(round(self.display._marquee.scale * 100)),
+                                    int(round(self.display.comment_scale() * 100)))
+
+    def _on_text_mode_clicked(self, mode: str) -> None:
+        if mode == self.display.text_mode():
+            self._refresh_text_mode_ui()
+            return
+        self.display.set_text_mode(mode)
+
+    @Slot(str)
+    def _on_text_mode_changed(self, mode: str) -> None:
+        self.bridge.set_text_mode(mode)
+        self._log_local("ADMIN", f"文字表示モード: {mode.upper()}")
+        self._refresh_text_mode_ui()
+
+    def _on_comment_scale_changed(self, pct: int) -> None:
+        self.display.set_comment_scale(int(pct) / 100.0)
+        self._push_text_scales()
+        self._log_local("ADMIN", f"COMMENT 文字サイズ: {pct}%")
+
+    def _on_comment_max_changed(self, n: int) -> None:
+        self.display.set_comment_max_entries(int(n))
+
+    def _on_comment_ttl_changed(self, sec: int) -> None:
+        self.display.set_comment_ttl_sec(float(sec))
+
+    def _on_comment_bg_changed(self, pct: int) -> None:
+        self.display.set_comment_bg_opacity(int(pct) / 100.0)
+
+    def _local_comment_send(self) -> None:
+        text = self.cmEdit.text().strip()
+        if not text:
+            return
+        res = self.display.add_comment(text, who="", kind="text")
+        preview = text if len(text) <= 60 else text[:57] + "..."
+        self._log_local("COMMENT", f"{'' if res == 'OK' else '✖ ' + res + '  '}{preview}")
+        if res == "OK":
+            self.cmEdit.clear()
+
+    def _local_comment_clear(self) -> None:
+        self.display.clear_comments()
+        self._log_local("COMMENT", "CLEAR")
+
+    # ---------------- おわくさ AI commands (POST /ai) ----------------
+    _AI_MARQUEE_STYLE = {
+        "viewer": ("<c>", "</>"),
+        "ai":     ("<y>", "</>"),
+        "info":   ("<w>", "</>"),
+        "text":   ("", ""),
+    }
+
+    def _show_lines(self, lines: list, speed: int, force: str = "") -> None:
+        """Route text lines to the active text mode (or `force` one)."""
+        mode = force or self.display.text_mode()
+        for ln in lines:
+            who = (ln.get("who") or "").strip()
+            text = (ln.get("text") or "").strip()
+            kind = ln.get("kind") or "text"
+            if mode == "comment":
+                self.display.add_comment(text, who=who, kind=kind)
+            else:
+                o, c = self._AI_MARQUEE_STYLE.get(kind, ("", ""))
+                body = f"{o}{who}{c} {text}".strip() if who else text
+                if body:
+                    self.display.add_marquee(body, speed)
+
+    @Slot(str, str, str, object)
+    def on_ai_command(self, cid: str, label: str, ip: str, c: object) -> None:
+        """Execute one validated /ai command (see web_server._ai_normalize)."""
+        if not isinstance(c, dict):
+            return
+        import time as _time
+        self.lblAiStatus.setText(f"AI: 最終受信 {_time.strftime('%H:%M:%S')}")
+        cmd = c.get("cmd")
+        if cmd == "say":
+            self._show_lines(c["lines"], c.get("speed", 1))
+        elif cmd == "comment":
+            self._show_lines(c["lines"], c.get("speed", 1), force="comment")
+        elif cmd == "marquee":
+            self.display.add_marquee(c["text"], int(c.get("speed", 1)))
+        elif cmd == "marquee_stop":
+            self.display.stop_marquee()
+        elif cmd == "clear":
+            t = c.get("target", "all")
+            if t in ("all", "comment"):
+                self.display.clear_comments()
+            if t in ("all", "marquee"):
+                self.display.stop_marquee()
+        elif cmd == "mode":
+            m = c.get("mode")
+            if m == "toggle":
+                m = "comment" if self.display.text_mode() == "marquee" else "marquee"
+            self.display.set_text_mode(m)
+        elif cmd == "size":
+            target = c.get("target") or self.display.text_mode()
+            targets = ("comment", "marquee") if target == "both" else (target,)
+            for t in targets:
+                cur = (self.display.comment_scale() if t == "comment"
+                       else self.display._marquee.scale)
+                pct = c["pct"] if "pct" in c else int(round(cur * 100)) + c["delta"]
+                pct = max(50, min(500, int(pct)))
+                sp = self.spCmScale if t == "comment" else self.spMqScale
+                sp.setValue(pct)   # valueChanged → display setter + log
+        elif cmd == "fx":
+            kind = c["kind"]
+            self.display.trigger_fx(kind)
+            self.audio.play_fx(kind)
 
     # ---------------- request log ----------------
     _LOG_COLORS = {
@@ -1645,6 +1885,8 @@ class ControlWindow(QWidget):
         "ADMIN":        "#aa7f9a",
         "MY/STOP":      "#b88867",
         "PIANO":        "#4a8fc4",
+        "AI":           "#5a8fbf",
+        "COMMENT":      "#6c9c7a",
     }
 
     @Slot(str, str)
@@ -2025,6 +2267,7 @@ class ControlWindow(QWidget):
 
     def _on_marquee_scale_changed(self, pct: int) -> None:
         self.display.set_marquee_scale(int(pct) / 100.0)
+        self._push_text_scales()
         self._log_local("ADMIN", f"横スクロール文字サイズ: {pct}%")
 
     def _open_video(self) -> None:

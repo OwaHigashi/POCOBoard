@@ -105,6 +105,23 @@ def main() -> int:
     # Scroll speed at speed-stop 1 (px/s) and pinned-message lifetime (s).
     marquee_scroll_pps = cfg.get_int("marquee_scroll_pps", 320)
     marquee_pin_sec    = cfg.get_float("marquee_pin_sec", 3.0)
+    # COMMENT mode (おわくさ AI feed, comment_feed.py).  text_mode picks
+    # where generic text lands at boot: 'marquee' (legacy Niconico lanes)
+    # or 'comment' (upward feed).  comment_size_pct follows the marquee
+    # size convention (100 = marquee_size); falls back to marquee_size_pct.
+    text_mode          = cfg.get_str("text_mode", "marquee").strip().lower()
+    comment_size_pct   = cfg.get_int("comment_size_pct", marquee_size_pct)
+    comment_max_lines  = cfg.get_int("comment_max_lines", 12)
+    comment_ttl_sec    = cfg.get_float("comment_ttl_sec", 0.0)
+    comment_width_pct  = cfg.get_int("comment_width_pct", 92)
+    comment_bottom_pct = cfg.get_int("comment_bottom_pct", 4)
+    comment_height_pct = cfg.get_int("comment_height_pct", 90)
+    comment_bg_pct     = cfg.get_int("comment_bg_pct", 45)
+    comment_scroll_ms  = cfg.get_int("comment_scroll_ms", 350)
+    comment_show_time  = cfg.get_bool("comment_show_time", False)
+    # Shared secret for POST /ai (empty = any LAN client may drive the AI
+    # screen buffer).  The おわくさ script sends it as X-Poco-AI-Token.
+    ai_token           = cfg.get_str("ai_token", "")
     # Idle title: quiet seconds before it fades back in (0 = never) and
     # the fade-in duration.
     idle_return_sec    = cfg.get_int("idle_return_sec", 300)
@@ -193,6 +210,7 @@ def main() -> int:
     bridge.set_volume(startup_ext_volume)
     bridge.set_accept(accept_on_boot)
     bridge.set_upload_limits(upload_image_mb, upload_video_mb, upload_audio_mb)
+    bridge.set_ai_token(ai_token)
 
     audio = AudioEngine()
     audio.set_fx_volume(startup_fx_volume)
@@ -238,6 +256,17 @@ def main() -> int:
     display.set_camera_poll_fps(float(camera_poll_fps))
     display.set_marquee_scroll_pps(float(marquee_scroll_pps))
     display.set_marquee_pin_sec(marquee_pin_sec)
+    display.set_comment_scale(max(50, min(500, comment_size_pct)) / 100.0)
+    display.set_comment_max_entries(max(1, min(60, comment_max_lines)))
+    display.set_comment_ttl_sec(max(0.0, comment_ttl_sec))
+    display.set_comment_layout(max(20, min(100, comment_width_pct)) / 100.0,
+                               max(0, min(50, comment_bottom_pct)) / 100.0,
+                               max(10, min(100, comment_height_pct)) / 100.0)
+    display.set_comment_bg_opacity(max(0, min(100, comment_bg_pct)) / 100.0)
+    display.set_comment_scroll_ms(float(comment_scroll_ms))
+    display.set_comment_show_time(comment_show_time)
+    display.set_text_mode("comment" if text_mode.startswith("c") else "marquee")
+    bridge.set_text_mode(display.text_mode())
     display.set_hstretch_preset(
         1, max(50, min(400, camera_hstretch1)) / 100.0,
         max(100, min(400, output_hstretch1)) / 100.0)
@@ -315,6 +344,9 @@ def main() -> int:
                                     display.add_marquee(text, speed))
     bridge.marqueeStop.connect(lambda cid, label, ip: display.stop_marquee())
     display.marqueeStatusChanged.connect(ctrl.on_marquee_changed)
+    # おわくさ AI (POST /ai) — executed on the Qt thread by the control
+    # window, which also routes 'say' to the active MARQUEE / COMMENT mode.
+    bridge.aiRequested.connect(ctrl.on_ai_command)
     bridge.requestLogged.connect(ctrl.on_request_logged)
     bridge.clientsChanged.connect(ctrl.refresh_users)
     # Uploaded media flows through the control window: it enqueues, and
@@ -348,6 +380,8 @@ def main() -> int:
     print(f"[pocoboard] screens: {[s.name() for s in screens]}")
     print(f"[pocoboard] control screen={ctrl_screen}, display screen={disp_screen}, "
           f"fullscreen={fs_default}")
+    print(f"[pocoboard] text mode={display.text_mode()}  "
+          f"(POST /ai {'token required' if ai_token else 'open on LAN'})")
     # Initial user-list render (usually empty at this point).
     ctrl.refresh_users()
 

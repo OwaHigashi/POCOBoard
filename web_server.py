@@ -7,6 +7,15 @@ Endpoints:
   POST /talk             Int16LE mono PCM streamed to speaker (mixed)
   POST /marquee          UTF-8 text with markup → scrolling lane
   POST /marquee/stop     stops all marquee lanes
+  POST /ai               おわくさ (AI) screen-buffer commands — JSON body
+                         {"cmd": "say"|"comment"|"marquee"|"clear"|"mode"|
+                                 "size"|"fx"|"marquee_stop", ...}
+                         or {"cmds": [ ...several of the above... ]}.
+                         Optional shared secret: config ai_token, sent as
+                         header X-Poco-AI-Token (or ?token=).  Not subject to
+                         the ACCEPT switch / client blocks — it is the
+                         operator's own agent (see README "AI / COMMENT").
+  GET  /ai/status        JSON: text mode, feed count, sizes
   POST /name             persist display name (sets `poco_name` cookie)
   POST /upload           upload a media file (image / video / audio)
                          ?type=image|video|audio&filename=foo.jpg
@@ -85,6 +94,10 @@ class WebBridge(QObject):
     # kind ∈ {'image','video','audio','all'}.  A ControlWindow slot listens
     # and actually performs the stop if ownership still matches.
     myStopRequested  = Signal(str, str)
+    # おわくさ AI command — (client_id, label, ip, command dict).  The
+    # dict is validated in the handler (whitelisted cmd / bounded strings);
+    # ControlWindow.on_ai_command executes it on the Qt thread.
+    aiRequested      = Signal(str, str, str, object)
     # pre-formatted log line
     requestLogged    = Signal(str, str)
     # emitted whenever the client registry or any blocked flag changes
@@ -104,6 +117,14 @@ class WebBridge(QObject):
         # 503 piano_mode and surfaces the flag in /status so the browser UI
         # can grey out the corresponding upload buttons.
         self._piano_mode = False
+        # COMMENT / MARQUEE text mode + feed size, mirrored from the display
+        # so /status and /ai/status can report them; ai_token gates /ai.
+        self._text_mode = "marquee"
+        self._comment_count = 0
+        self._comment_scale_pct = 100
+        self._marquee_scale_pct = 100
+        self._ai_token = ""
+        self._last_ai_ms = 0.0
         # Known clients — client_id -> {name, last_seen_ms, ip, blocked}
         self._clients: dict[str, dict] = {}
         # IPs blocked outright (operator action).  Checked alongside the
@@ -183,6 +204,50 @@ class WebBridge(QObject):
     def set_piano_mode(self, on: bool) -> None:
         with self._lock:
             self._piano_mode = bool(on)
+
+    # ---- AI / COMMENT mode ----
+    def set_ai_token(self, token: str) -> None:
+        with self._lock:
+            self._ai_token = (token or "").strip()
+
+    def ai_token_ok(self, presented: str) -> bool:
+        with self._lock:
+            want = self._ai_token
+        if not want:
+            return True
+        return secrets.compare_digest(want, (presented or "").strip())
+
+    def set_text_mode(self, mode: str) -> None:
+        with self._lock:
+            self._text_mode = "comment" if str(mode).startswith("c") else "marquee"
+
+    def text_mode(self) -> str:
+        with self._lock:
+            return self._text_mode
+
+    def set_comment_status(self, count: int) -> None:
+        with self._lock:
+            self._comment_count = int(count)
+
+    def set_text_scales(self, marquee_pct: int, comment_pct: int) -> None:
+        with self._lock:
+            self._marquee_scale_pct = int(marquee_pct)
+            self._comment_scale_pct = int(comment_pct)
+
+    def ai_snapshot(self) -> dict:
+        with self._lock:
+            return {
+                "mode": self._text_mode,
+                "comment": {"count": self._comment_count,
+                            "size_pct": self._comment_scale_pct},
+                "marquee": {"used": self._marquee_lanes_used,
+                            "size_pct": self._marquee_scale_pct},
+                "last_ai_ms": int(self._last_ai_ms),
+            }
+
+    def note_ai(self) -> None:
+        with self._lock:
+            self._last_ai_ms = time.time() * 1000
 
     def is_piano_mode(self) -> bool:
         with self._lock:
@@ -556,9 +621,146 @@ class _Handler(BaseHTTPRequestHandler):
                 # tiny "🎹 演出中" hint so users know their photo /
                 # video will appear translucently on top of the keyboard.
                 "piano_mode": self.bridge.is_piano_mode(),
+                "text_mode": self.bridge.text_mode(),
             }, set_cookie=new_cookie)
             return
+        if u.path == "/ai/status":
+            if not self._ai_authorized(parse_qs(u.query or "")):
+                return
+            snap = self.bridge.ai_snapshot()
+            snap["ok"] = True
+            self._send_json(200, snap)
+            return
         self._send_json(404, {"ok": False, "reason": "not_found"})
+
+    # ===== AI (おわくさ) =====
+    _AI_CMDS = {"say", "comment", "marquee", "clear", "mode", "size", "fx",
+                "marquee_stop"}
+    _AI_FX = {"bomb", "clap", "cheer", "hearts", "stars", "snow", "petals",
+              "aurora", "laser", "sunset", "leaves", "notes", "rainbow"}
+    _AI_MAX_TEXT = 2000
+
+    def _ai_authorized(self, query: dict) -> bool:
+        tok = self.headers.get("X-Poco-AI-Token", "") or (query.get("token", [""])[0])
+        if self.bridge.ai_token_ok(tok):
+            return True
+        self._send_json(403, {"ok": False, "reason": "bad_token"})
+        return False
+
+    @classmethod
+    def _ai_normalize(cls, c) -> Optional[dict]:
+        """Whitelist + bound one command.  Returns None when unusable."""
+        if not isinstance(c, dict):
+            return None
+        cmd = str(c.get("cmd", "")).strip().lower()
+        if cmd not in cls._AI_CMDS:
+            return None
+        out: dict = {"cmd": cmd}
+        M = cls._AI_MAX_TEXT
+
+        def _s(v, n=M) -> str:
+            return str(v if v is not None else "")[:n]
+
+        if cmd in ("say", "comment"):
+            lines = c.get("lines")
+            if isinstance(lines, list):
+                norm = []
+                for ln in lines[:20]:
+                    if isinstance(ln, dict):
+                        norm.append({"who": _s(ln.get("who"), 64),
+                                     "text": _s(ln.get("text")),
+                                     "kind": _s(ln.get("kind"), 16) or "text"})
+                    else:
+                        norm.append({"who": "", "text": _s(ln), "kind": "text"})
+                out["lines"] = [l for l in norm if l["text"] or l["who"]]
+            else:
+                out["lines"] = [{"who": _s(c.get("who"), 64),
+                                 "text": _s(c.get("text")),
+                                 "kind": _s(c.get("kind"), 16) or "text"}]
+            if not out["lines"] or not any(l["text"] or l["who"] for l in out["lines"]):
+                return None
+            try:
+                out["speed"] = max(1, min(5, int(c.get("speed", 1))))
+            except (TypeError, ValueError):
+                out["speed"] = 1
+        elif cmd == "marquee":
+            out["text"] = _s(c.get("text")).strip()
+            if not out["text"]:
+                return None
+            try:
+                out["speed"] = max(1, min(5, int(c.get("speed", 1))))
+            except (TypeError, ValueError):
+                out["speed"] = 1
+        elif cmd == "clear":
+            t = _s(c.get("target"), 16).lower() or "all"
+            out["target"] = t if t in ("all", "comment", "marquee") else "all"
+        elif cmd == "mode":
+            m = _s(c.get("mode"), 16).lower()
+            if m.startswith("c"):
+                out["mode"] = "comment"
+            elif m.startswith("m"):
+                out["mode"] = "marquee"
+            elif m in ("toggle", "switch", ""):
+                out["mode"] = "toggle"
+            else:
+                return None
+        elif cmd == "size":
+            t = _s(c.get("target"), 16).lower()
+            out["target"] = t if t in ("comment", "marquee", "both") else ""
+            pct = c.get("pct")
+            delta = c.get("delta")
+            try:
+                if pct is not None:
+                    out["pct"] = max(50, min(500, int(pct)))
+                elif delta is not None:
+                    out["delta"] = max(-450, min(450, int(delta)))
+                else:
+                    return None
+            except (TypeError, ValueError):
+                return None
+        elif cmd == "fx":
+            k = _s(c.get("kind"), 16).lower()
+            if k == "cheer":
+                k = "clap"
+            if k not in cls._AI_FX:
+                return None
+            out["kind"] = k
+        return out
+
+    def _handle_ai(self, query: dict) -> None:
+        if not self._ai_authorized(query):
+            return
+        cid, label, ip, new_cookie = self._who()
+        body = self._read_body(256 * 1024)
+        if not body:
+            self._send_json(400, {"ok": False, "reason": "empty"}, set_cookie=new_cookie)
+            return
+        try:
+            j = json.loads(body.decode("utf-8"))
+        except (UnicodeDecodeError, ValueError):
+            self._send_json(400, {"ok": False, "reason": "bad_json"}, set_cookie=new_cookie)
+            return
+        raw_cmds = j.get("cmds") if isinstance(j, dict) and isinstance(j.get("cmds"), list) else [j]
+        cmds = []
+        rejected = 0
+        for c in raw_cmds[:32]:
+            n = self._ai_normalize(c)
+            if n is None:
+                rejected += 1
+            else:
+                cmds.append(n)
+        if not cmds:
+            self._send_json(400, {"ok": False, "reason": "bad_cmd", "rejected": rejected},
+                            set_cookie=new_cookie)
+            return
+        now_hms = time.strftime("%H:%M:%S")
+        for c in cmds:
+            self.bridge.aiRequested.emit(cid, label, ip, c)
+            self.bridge.emit_log("AI", f"{now_hms}  {label:24s}  AI        {_ai_preview(c)}")
+        self.bridge.note_ai()
+        snap = self.bridge.ai_snapshot()
+        self._send_json(200, {"ok": True, "n": len(cmds), "rejected": rejected,
+                              "mode": snap["mode"]}, set_cookie=new_cookie)
 
     # ===== POST =====
     def _reject_if_not_allowed(self, cid: str, label: str, ip: str,
@@ -716,6 +918,10 @@ class _Handler(BaseHTTPRequestHandler):
             self._send_json(200, {"ok": True}, set_cookie=new_cookie)
             return
 
+        if path == "/ai":
+            self._handle_ai(query)
+            return
+
         if path == "/marquee/stop":
             cid, label, ip, new_cookie = self._who()
             self.bridge.marqueeStop.emit(cid, label, ip)
@@ -821,6 +1027,28 @@ class _Handler(BaseHTTPRequestHandler):
                 os.remove(path)
             except OSError:
                 pass
+
+
+def _ai_preview(c: dict) -> str:
+    cmd = c.get("cmd", "?")
+    if cmd in ("say", "comment"):
+        first = c["lines"][0]
+        txt = (first.get("who", "") + " " + first.get("text", "")).strip().replace("\n", " ")
+        more = f" (+{len(c['lines']) - 1})" if len(c["lines"]) > 1 else ""
+        return f"{cmd:<8s} {txt[:57] + '...' if len(txt) > 60 else txt}{more}"
+    if cmd == "marquee":
+        t = c["text"].replace("\n", " ")
+        return f"marquee  x{c['speed']}  {t[:57] + '...' if len(t) > 60 else t}"
+    if cmd == "clear":
+        return f"clear    {c['target']}"
+    if cmd == "mode":
+        return f"mode     {c['mode']}"
+    if cmd == "size":
+        what = f"{c['pct']}%" if "pct" in c else f"{c['delta']:+d}%"
+        return f"size     {c['target'] or 'auto'} {what}"
+    if cmd == "fx":
+        return f"fx       {c['kind']}"
+    return cmd
 
 
 def build_server(host: str, port: int, bridge: WebBridge,
