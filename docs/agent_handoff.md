@@ -1786,3 +1786,13 @@ GitHub 上に hirowest は一度も出ていなかった。
 あることをコミット前に確認する（グローバルは Hiro West なので危険）。
 残っている「.claude/」の語はディレクトリパスの言及のみ（2 コミット、
 attribution ではない）。
+
+追記（同日、第2セッション）: 残っていた「.claude/」パス言及 2 コミットも
+書き換えて force push（M5Core-MIDITransposerBT, M5Tab-MIDIXposeFil）。
+GitHub 全 repo・全ブランチを再監査してクリーン。再発防止として
+~/.githooks を強化（prepare-commit-msg で帰属行を自動除去、commit-msg /
+pre-commit で Claude 語句と非 OwaHigashi identity を拒否、pre-push で送信
+前に全コミット再検査）、Claude Code 側は廃止済みの includeCoAuthoredBy を
+attribution{commit,pr,sessionUrl}=false に置換し PreToolUse ガードを追加、
+git は includeIf hasconfig で OwaHigashi リモートの repo は自動的に
+OwaHigashi identity、ローカル 69 クローンに明示設定済み。
