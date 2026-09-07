@@ -177,6 +177,13 @@ http://192.168.1.23:8080/
     間隔をまとめて拡縮する。100 で以前のゆったりした見た目。
   - テスト入力 + `行を追加` — 本機からフィードに 1 行出します（`<r>` 等のタグ可）。
   - `COMMENT CLEAR` — フィードの全行を消します（横スクロールは残ります）。
+  - `🧠 システムプロンプト編集…` — 動作中のおわくさ（POCOMon `scripts/owakusa.py`）の
+    **システムプロンプト（人格・口調）・名前・返答の長さ**を配信中に差し替えるダイアログ。
+    `取得` で今の内容を取ってきて、書き換えて `設定` で次の返答から効きます。`既定に戻す` で
+    おわくさ側の起動時の値に。`おわくさ側にファイル保存` を ON にすると再起動後も残ります。
+    おわくさの場所（URL）は、おわくさが `POST /ai` を送るたびにヘッダ `X-Poco-AI-Url` で
+    名乗るので自動で入ります（`config.ini` の `ai_url` で固定も可）。`ai_token` を設定して
+    いれば同じトークンで認証します。ログタブに `AI/PROMPT` として残ります。
   - 右上の `AI: 最終受信 hh:mm:ss` で、おわくさから最後に命令が届いた時刻が分かります。
 
 フィードは画面下端に新しい行が現れ、古い行が上へ滑って押し出される「上に向かって
@@ -396,7 +403,7 @@ http://<IP>:<port>/
 | POST | `/marquee?speed=1..5` | UTF-8 text | 横スクロール送信 |
 | POST | `/marquee/stop` | - | 横スクロール停止 |
 | POST | `/ai` | JSON（下記） | おわくさ AI の画面操作。`X-Poco-AI-Token` ヘッダ（`ai_token` 設定時） |
-| GET | `/ai/status` | - | `{mode, comment:{count,size_pct}, marquee:{used,size_pct}, last_ai_ms}` |
+| GET | `/ai/status` | - | `{mode, comment:{count,size_pct}, marquee:{used,size_pct}, last_ai_ms, ai_url}` |
 | POST | `/name` | `{"name":"Alice"}` | 表示名保存 |
 | POST | `/upload?type=image|video|audio&filename=...` | raw binary | メディアアップロード |
 | POST | `/my/stop?kind=image|video|audio|all` | - | 自分のメディアだけ止める |
@@ -444,6 +451,11 @@ Body は 1 命令の JSON か、`{"cmds": [ ... ]}` で複数命令をまとめ�
 
 応答: `{"ok": true, "n": 実行数, "rejected": 無視した数, "mode": 現在モード}`。
 不正な命令のみなら `400 bad_cmd`、トークン不一致は `403 bad_token`。
+
+AI 側は任意のヘッダ `X-Poco-AI-Url: http://10.1.2.12:8765` で自分の制御口を名乗れます。
+POCOBoard はそれを覚えて（`GET /ai/status` の `ai_url`）、制御画面の「システムプロンプト編集」が
+その URL の `GET /prompt` / `PUT /prompt` を叩きます（POCOBoard 自身は中継しません。`ai_token` を
+設定していれば同じ値を `X-Poco-AI-Token` で送ります）。
 
 例:
 
@@ -543,6 +555,7 @@ comment_scroll_ms = 350    ; 新着時に上へ滑るアニメの時間
 comment_show_time = false  ; 行頭に時刻 (HH:MM) を付ける
 comment_spacing_pct = 40   ; 行間の詰め具合 (0..200)。100 = 旧来のゆったり、40 で約 2.5 倍詰まる
 ;ai_token =                ; POST /ai の共有トークン。空なら LAN 内の誰でも AI 操作可
+;ai_url =                  ; おわくさの制御口 (GET/PUT /prompt)。通常は空: POST /ai のヘッダ X-Poco-AI-Url で毎回名乗る
 ```
 
 起動時オプション:

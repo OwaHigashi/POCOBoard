@@ -126,6 +126,9 @@ def main() -> int:
     # Shared secret for POST /ai (empty = any LAN client may drive the AI
     # screen buffer).  The おわくさ script sends it as X-Poco-AI-Token.
     ai_token           = cfg.get_str("ai_token", "")
+    # Control endpoint of おわくさ (GET/PUT /prompt).  Normally left empty:
+    # owakusa.py announces it in the X-Poco-AI-Url header of every /ai call.
+    ai_url             = cfg.get_str("ai_url", "")
     # Idle title: quiet seconds before it fades back in (0 = never) and
     # the fade-in duration.
     idle_return_sec    = cfg.get_int("idle_return_sec", 300)
@@ -221,6 +224,7 @@ def main() -> int:
     bridge.set_accept(accept_on_boot)
     bridge.set_upload_limits(upload_image_mb, upload_video_mb, upload_audio_mb)
     bridge.set_ai_token(ai_token)
+    bridge.set_ai_url(ai_url)
 
     audio = AudioEngine()
     audio.set_fx_volume(startup_fx_volume)

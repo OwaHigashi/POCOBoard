@@ -15,7 +15,11 @@ Endpoints:
                          header X-Poco-AI-Token (or ?token=).  Not subject to
                          the ACCEPT switch / client blocks — it is the
                          operator's own agent (see README "AI / COMMENT").
-  GET  /ai/status        JSON: text mode, feed count, sizes
+                         The agent may announce its own control endpoint in
+                         header X-Poco-AI-Url (e.g. http://10.1.2.12:8765);
+                         the control window's システムプロンプト編集 dialog
+                         talks to that URL (GET/PUT /prompt).
+  GET  /ai/status        JSON: text mode, feed count, sizes, ai_url
   POST /name             persist display name (sets `poco_name` cookie)
   POST /upload           upload a media file (image / video / audio)
                          ?type=image|video|audio&filename=foo.jpg
@@ -125,6 +129,9 @@ class WebBridge(QObject):
         self._marquee_scale_pct = 100
         self._ai_token = ""
         self._last_ai_ms = 0.0
+        # Control endpoint of the AI (おわくさ) — from config ai_url, then
+        # overwritten by the X-Poco-AI-Url header of every /ai request.
+        self._ai_url = ""
         # Known clients — client_id -> {name, last_seen_ms, ip, blocked}
         self._clients: dict[str, dict] = {}
         # IPs blocked outright (operator action).  Checked alongside the
@@ -210,6 +217,23 @@ class WebBridge(QObject):
         with self._lock:
             self._ai_token = (token or "").strip()
 
+    def ai_token(self) -> str:
+        with self._lock:
+            return self._ai_token
+
+    def set_ai_url(self, url: str) -> None:
+        url = (url or "").strip().rstrip("/")
+        if url and not (url.startswith("http://") or url.startswith("https://")):
+            return
+        if len(url) > 200:
+            return
+        with self._lock:
+            self._ai_url = url
+
+    def ai_url(self) -> str:
+        with self._lock:
+            return self._ai_url
+
     def ai_token_ok(self, presented: str) -> bool:
         with self._lock:
             want = self._ai_token
@@ -243,6 +267,7 @@ class WebBridge(QObject):
                 "marquee": {"used": self._marquee_lanes_used,
                             "size_pct": self._marquee_scale_pct},
                 "last_ai_ms": int(self._last_ai_ms),
+                "ai_url": self._ai_url,
             }
 
     def note_ai(self) -> None:
@@ -643,6 +668,11 @@ class _Handler(BaseHTTPRequestHandler):
     def _ai_authorized(self, query: dict) -> bool:
         tok = self.headers.get("X-Poco-AI-Token", "") or (query.get("token", [""])[0])
         if self.bridge.ai_token_ok(tok):
+            # The agent tells us where its own control endpoint lives so
+            # the operator can edit its system prompt from this PC.
+            announced = self.headers.get("X-Poco-AI-Url", "")
+            if announced:
+                self.bridge.set_ai_url(announced)
             return True
         self._send_json(403, {"ok": False, "reason": "bad_token"})
         return False

@@ -7,17 +7,22 @@ user list can then scroll through 10+ clients without squeezing the
 rest of the UI.
 """
 from __future__ import annotations
+import json
 import os
 import re
 import socket
+import threading
+import urllib.error
+import urllib.request
 
 from PySide6.QtCore    import Qt, QTimer, Signal, Slot
 from PySide6.QtGui     import QFont, QGuiApplication
 from PySide6.QtWidgets import (
-    QApplication, QAbstractScrollArea, QComboBox, QFileDialog,
-    QFrame, QGridLayout, QGroupBox, QHBoxLayout, QLabel, QMessageBox,
-    QLineEdit, QPushButton, QScrollArea, QSlider, QSpinBox, QTabWidget,
-    QTextBrowser, QTextEdit, QVBoxLayout, QWidget,
+    QApplication, QAbstractScrollArea, QCheckBox, QComboBox, QDialog,
+    QFileDialog, QFrame, QGridLayout, QGroupBox, QHBoxLayout, QLabel,
+    QMessageBox, QLineEdit, QPlainTextEdit, QPushButton, QScrollArea,
+    QSlider, QSpinBox, QTabWidget, QTextBrowser, QTextEdit, QVBoxLayout,
+    QWidget,
 )
 
 from audio        import AudioEngine
@@ -479,6 +484,278 @@ class _UserRow(QWidget):
 # ============================================================
 #  Main control window
 # ============================================================
+class PromptDialog(QDialog):
+    """おわくさ (POCOMon scripts/owakusa.py) のシステムプロンプト・名前・返答の長さを、動作中に 取得 / 設定 する。
+
+    おわくさは POST /ai のたびにヘッダ X-Poco-AI-Url で自分の制御口 (既定 http://<IP>:8765)
+    を名乗る。ここはその URL に
+      GET /prompt          取得 (現在のシステムプロンプト / 名前 / 返答の長さ)
+      PUT /prompt {prompt, name, max_chars, max_chars_command}
+                           設定 (次の返答から効く)。{"reset": true} で起動時の既定に戻す。
+                           {"save": true} で owakusa 側のファイルにも書き、再起動後も残す
+    を投げる。config.ini の ai_token を設定していれば同じ値を X-Poco-AI-Token で送る。
+    HTTP は別スレッドで叩き、結果を Signal で Qt スレッドに戻す (画面は固まらない)。
+    """
+
+    _done = Signal(str, object)     # (op, dict | str error)
+    _TIMEOUT = 8.0
+
+    def __init__(self, parent: QWidget, bridge: WebBridge, log_cb) -> None:
+        super().__init__(parent)
+        self._bridge = bridge
+        self._log = log_cb
+        self._busy = False
+        self._loaded_prompt: str | None = None
+        self.setWindowTitle("🧠 おわくさ システムプロンプト編集")
+        self.setModal(False)
+        self.resize(820, 640)
+        self._done.connect(self._on_done)
+
+        v = QVBoxLayout(self)
+        v.setSpacing(8)
+        v.setContentsMargins(12, 12, 12, 12)
+
+        row = QHBoxLayout()
+        row.addWidget(QLabel("おわくさの場所:"))
+        self.edUrl = QLineEdit()
+        self.edUrl.setPlaceholderText("http://10.1.2.12:8765  (POST /ai を受けると自動で入ります)")
+        self.edUrl.setMinimumHeight(30)
+        self.edUrl.setToolTip(
+            "おわくさ (owakusa.py) の制御口の URL。\n"
+            "owakusa.py が POST /ai を送ってくるたびにヘッダ X-Poco-AI-Url で名乗るので、\n"
+            "通常は空のままで自動的に埋まります (config.ini の ai_url で固定も可)。")
+        row.addWidget(self.edUrl, stretch=1)
+        self.btnUrlAuto = QPushButton("自動")
+        self.btnUrlAuto.setToolTip("おわくさが最後に名乗った URL を入れ直します。")
+        self.btnUrlAuto.setMinimumHeight(30)
+        self.btnUrlAuto.clicked.connect(self._fill_url_from_bridge)
+        row.addWidget(self.btnUrlAuto)
+        v.addLayout(row)
+
+        prow = QHBoxLayout()
+        prow.setSpacing(6)
+        prow.addWidget(QLabel("名前:"))
+        self.edName = QLineEdit()
+        self.edName.setMaxLength(20)
+        self.edName.setMinimumHeight(30)
+        self.edName.setMaximumWidth(220)
+        self.edName.setToolTip(
+            "画面に出る発言者名 (🤖 の後ろ) と、視聴者が呼びかけるときの名前。\n"
+            "変えると「こんぴーた、画面消して」のように新しい名前で呼べます (おわくさ等の元の名前でも反応)。\n"
+            "システムプロンプト側は書き換えなくても、おわくさが読み替えの一文を自動で足します。")
+        prow.addWidget(self.edName)
+        prow.addSpacing(12)
+        prow.addWidget(QLabel("返答の長さ:"))
+        self.spChars = QSpinBox()
+        self.spChars.setRange(0, 500)
+        self.spChars.setSuffix(" 文字")
+        self.spChars.setSpecialValueText("制限なし")
+        self.spChars.setMinimumHeight(30)
+        self.spChars.setToolTip(
+            "ふつうの反応 (コメントへのツッコミ等) をコード側で詰める上限。文の区切りで切ります。\n"
+            "システムプロンプトの「20 文字前後」とは別の、最終的な安全弁 (owakusa.ini [llm] max_chars)。\n"
+            "長い返答にしたいときはプロンプトの指示と一緒にここも増やしてください。0 = 詰めない。")
+        prow.addWidget(self.spChars)
+        prow.addSpacing(8)
+        prow.addWidget(QLabel("呼びかけへの返答:"))
+        self.spCharsCmd = QSpinBox()
+        self.spCharsCmd.setRange(0, 500)
+        self.spCharsCmd.setSuffix(" 文字")
+        self.spCharsCmd.setSpecialValueText("制限なし")
+        self.spCharsCmd.setMinimumHeight(30)
+        self.spCharsCmd.setToolTip("名前で呼ばれたとき (質問への答え・画面操作の一言) の上限 (owakusa.ini [llm] max_chars_command)。")
+        prow.addWidget(self.spCharsCmd)
+        prow.addStretch(1)
+        v.addLayout(prow)
+
+        v.addWidget(QLabel("システムプロンプト (人格・口調):"))
+        self.editor = QPlainTextEdit()
+        self.editor.setPlaceholderText(
+            "「取得」を押すと、いま動いているおわくさのシステムプロンプト (人格部分) がここに入ります。\n"
+            "書き換えて「設定」を押すと、名前・返答の長さと一緒に次の返答から効きます。")
+        f = QFont("Segoe UI", 11)
+        self.editor.setFont(f)
+        self.editor.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
+        v.addWidget(self.editor, stretch=1)
+
+        self.lblInfo = QLabel("")
+        self.lblInfo.setProperty("class", "small")
+        self.lblInfo.setWordWrap(True)
+        v.addWidget(self.lblInfo)
+
+        row2 = QHBoxLayout()
+        row2.setSpacing(6)
+        self.btnGet = QPushButton("取得")
+        self.btnGet.setToolTip("動作中のおわくさから現在のシステムプロンプトを取得して表示します (GET /prompt)。")
+        self.btnGet.setMinimumHeight(34)
+        self.btnGet.setMinimumWidth(96)
+        self.btnGet.clicked.connect(self.fetch)
+        row2.addWidget(self.btnGet)
+        self.btnSet = QPushButton("設定")
+        self.btnSet.setProperty("class", "send")
+        self.btnSet.setToolTip("編集後のシステムプロンプトをおわくさに送ります (PUT /prompt)。次の返答から効きます。")
+        self.btnSet.setMinimumHeight(34)
+        self.btnSet.setMinimumWidth(96)
+        self.btnSet.clicked.connect(self.apply)
+        row2.addWidget(self.btnSet)
+        self.btnReset = QPushButton("既定に戻す")
+        self.btnReset.setToolTip("内蔵既定のシステムプロンプトと、起動時の名前・返答の長さ (owakusa.ini) に戻します。")
+        self.btnReset.setMinimumHeight(34)
+        self.btnReset.clicked.connect(self.reset)
+        row2.addWidget(self.btnReset)
+        row2.addSpacing(12)
+        self.chkSave = QCheckBox("おわくさ側にファイル保存 (再起動後も有効)")
+        self.chkSave.setToolTip(
+            "ON にして「設定」すると owakusa 側のファイル (system_prompt.txt / owakusa_overrides.json) にも書き、\n"
+            "owakusa.py を起動し直しても同じプロンプト・名前・長さで始まります。\n"
+            "「既定に戻す」+ ON でそのファイルを消します。OFF なら今回の起動中だけ有効。")
+        row2.addWidget(self.chkSave)
+        row2.addStretch(1)
+        self.btnClose = QPushButton("閉じる")
+        self.btnClose.setMinimumHeight(34)
+        self.btnClose.clicked.connect(self.close)
+        row2.addWidget(self.btnClose)
+        v.addLayout(row2)
+
+        self.lblStatus = QLabel("")
+        self.lblStatus.setProperty("class", "small")
+        self.lblStatus.setWordWrap(True)
+        v.addWidget(self.lblStatus)
+
+        note = QLabel(
+            "ここで編集するのは人格・口調の部分だけです。画面操作の JSON 命令の説明 (COMMAND_PROMPT) は "
+            "おわくさが自動で後ろに付け足すので書く必要はありません。"
+            "端末からも  owakusa.py --prompt / --prompt-set FILE / --prompt-reset  で同じことができます。")
+        note.setProperty("class", "small")
+        note.setWordWrap(True)
+        v.addWidget(note)
+
+    # ---- helpers ----
+    def _fill_url_from_bridge(self) -> None:
+        url = self._bridge.ai_url()
+        if url:
+            self.edUrl.setText(url)
+        else:
+            self._set_status("おわくさからまだ POST /ai が来ていません (URL が分かりません)。"
+                             " owakusa.py を起動するか、URL を手で入れてください。", error=True)
+
+    def _url(self) -> str:
+        u = self.edUrl.text().strip().rstrip("/")
+        if not u:
+            u = self._bridge.ai_url()
+            if u:
+                self.edUrl.setText(u)
+        return u
+
+    def _set_status(self, text: str, error: bool = False) -> None:
+        self.lblStatus.setText(text)
+        self.lblStatus.setStyleSheet("color:#b03a2e;" if error else "color:#3d7a4a;")
+
+    def _set_busy(self, busy: bool) -> None:
+        self._busy = busy
+        for b in (self.btnGet, self.btnSet, self.btnReset):
+            b.setEnabled(not busy)
+
+    def showEvent(self, ev) -> None:   # noqa: N802 (Qt override)
+        super().showEvent(ev)
+        if not self.edUrl.text().strip():
+            self.edUrl.setText(self._bridge.ai_url())
+        if self._loaded_prompt is None and self._url():
+            self.fetch()
+
+    # ---- actions ----
+    def fetch(self) -> None:
+        self._request("get", "GET", "/prompt")
+
+    def apply(self) -> None:
+        text = self.editor.toPlainText().strip()
+        if not text:
+            self._set_status("プロンプトが空です。", error=True)
+            return
+        payload = {"prompt": text,
+                   "name": self.edName.text().strip() or None,
+                   "max_chars": int(self.spChars.value()),
+                   "max_chars_command": int(self.spCharsCmd.value()),
+                   "save": self.chkSave.isChecked()}
+        self._request("set", "PUT", "/prompt", payload)
+
+    def reset(self) -> None:
+        self._request("reset", "PUT", "/prompt", {"reset": True, "save": self.chkSave.isChecked()})
+
+    def _request(self, op: str, method: str, path: str, payload: dict | None = None) -> None:
+        if self._busy:
+            return
+        url = self._url()
+        if not url:
+            self._set_status("おわくさの場所 (URL) が分かりません。owakusa.py を起動すると自動で入ります。", error=True)
+            return
+        self._set_busy(True)
+        self._set_status({"get": "取得中…", "set": "設定中…", "reset": "既定に戻しています…"}[op])
+        headers = {"Content-Type": "application/json; charset=utf-8"}
+        tok = self._bridge.ai_token()
+        if tok:
+            headers["X-Poco-AI-Token"] = tok
+        data = json.dumps(payload, ensure_ascii=False).encode("utf-8") if payload is not None else None
+
+        def work() -> None:
+            try:
+                req = urllib.request.Request(url + path, data=data, headers=headers, method=method)
+                with urllib.request.urlopen(req, timeout=self._TIMEOUT) as resp:
+                    res = json.loads(resp.read().decode("utf-8") or "{}")
+            except urllib.error.HTTPError as e:
+                try:
+                    body = e.read().decode("utf-8", "replace")[:200]
+                except Exception:
+                    body = ""
+                res = f"HTTP {e.code} {body}"
+            except Exception as e:      # noqa: BLE001 — surface anything to the operator
+                res = f"{type(e).__name__}: {e}"
+            self._done.emit(op, res)
+
+        threading.Thread(target=work, name="poco-prompt", daemon=True).start()
+
+    @Slot(str, object)
+    def _on_done(self, op: str, res: object) -> None:
+        self._set_busy(False)
+        if not isinstance(res, dict) or not res.get("ok"):
+            why = res if isinstance(res, str) else (res.get("reason", "?") if isinstance(res, dict) else "?")
+            hint = ""
+            if "bad_token" in str(why):
+                hint = "  (config.ini の ai_token と owakusa.ini の token を揃えてください)"
+            elif "URLError" in str(why) or "refused" in str(why) or "timed out" in str(why):
+                hint = "  (owakusa.py が動いているか、URL / Windows Firewall を確認)"
+            self._set_status(f"✖ {'取得' if op == 'get' else '設定'}に失敗: {why}{hint}", error=True)
+            self._log("AI/PROMPT", f"✖ {op} failed: {why}")
+            return
+        prompt = res.get("prompt", "")
+        src = {"builtin": "内蔵既定", "file": "ファイル", "runtime": "編集済み (今回のみ)"}.get(res.get("source"), res.get("source"))
+        self.editor.setPlainText(prompt)
+        self._loaded_prompt = prompt
+        self.edName.setText(str(res.get("name", "")))
+        try:
+            self.spChars.setValue(int(res.get("max_chars", 0)))
+            self.spCharsCmd.setValue(int(res.get("max_chars_command", 0)))
+        except (TypeError, ValueError):
+            pass
+        self.lblInfo.setText(
+            f"{res.get('name', 'おわくさ')} / モデル {res.get('model', '?')} / いまのプロンプト: {src} / "
+            f"{len(prompt)} 文字 / 返答の長さ {res.get('max_chars', '?')} 文字 (呼びかけ時 {res.get('max_chars_command', '?')})"
+            + (f" / 口調指定中: {res['style']}" if res.get("style") else ""))
+        if op == "get":
+            self._set_status("✔ 取得しました。書き換えて「設定」で反映します。")
+            self._log("AI/PROMPT", f"GET  {len(prompt)} 文字 ({res.get('source')})")
+        elif op == "set":
+            saved = res.get("saved")
+            self._set_status("✔ 設定しました。次の返答から効きます。" + (f"  保存: {saved}" if saved else "  (今回の起動中のみ)"))
+            self._log("AI/PROMPT", f"SET  {len(prompt)} 文字 name={res.get('name')} "
+                                   f"chars={res.get('max_chars')}/{res.get('max_chars_command')}"
+                                   f"{'  saved=' + str(saved) if saved else ''}")
+        else:
+            self._set_status("✔ 起動時の既定 (プロンプト・名前・長さ) に戻しました。"
+                             + ("  保存ファイルも消しました。" if "removed" in str(res.get("saved") or "") else ""))
+            self._log("AI/PROMPT", "RESET")
+
+
 class ControlWindow(QWidget):
 
     def __init__(self, bridge: WebBridge, audio: AudioEngine,
@@ -985,15 +1262,36 @@ class ControlWindow(QWidget):
         row.addWidget(self.btnCmClear)
         g.addLayout(row, 2, 0, 1, 4)
 
+        row3 = QHBoxLayout()
+        self.btnPrompt = QPushButton("🧠 システムプロンプト編集…  (名前・返答の長さも)")
+        self.btnPrompt.setToolTip(
+            "動作中のおわくさ (owakusa.py) のシステムプロンプト・名前・返答の長さを 取得 / 設定 します。\n"
+            "おわくさが POST /ai を送ってくると場所 (X-Poco-AI-Url) が自動で分かります。")
+        self.btnPrompt.setMinimumHeight(32)
+        self.btnPrompt.clicked.connect(self._open_prompt_dialog)
+        row3.addWidget(self.btnPrompt)
+        row3.addStretch(1)
+        g.addLayout(row3, 3, 0, 1, 4)
+
         note = QLabel(
             "おわくさ (whitewhale の scripts/owakusa.py) は HTTP の POST /ai でこの画面を操作します: "
             "say / comment / marquee / clear / mode / size / fx。"
-            "config.ini の ai_token を設定すると、同じトークンを持つ相手だけ受け付けます。")
+            "config.ini の ai_token を設定すると、同じトークンを持つ相手だけ受け付けます。"
+            "「システムプロンプト編集」で、おわくさの人格・口調のプロンプトを配信中に差し替えられます。")
         note.setProperty("class", "small")
         note.setWordWrap(True)
-        g.addWidget(note, 3, 0, 1, 4)
+        g.addWidget(note, 4, 0, 1, 4)
         self._refresh_text_mode_ui()
         return box
+
+    def _open_prompt_dialog(self) -> None:
+        dlg = getattr(self, "_prompt_dialog", None)
+        if dlg is None:
+            dlg = PromptDialog(self, self.bridge, self._log_local)
+            self._prompt_dialog = dlg
+        dlg.show()
+        dlg.raise_()
+        dlg.activateWindow()
 
     # ---- tab: display window controls ----
     def _build_display_tab(self) -> QWidget:
