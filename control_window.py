@@ -545,16 +545,17 @@ class PromptDialog(QDialog):
             "システムプロンプト側は書き換えなくても、おわくさが読み替えの一文を自動で足します。")
         prow.addWidget(self.edName)
         prow.addSpacing(12)
-        prow.addWidget(QLabel("返答の長さ:"))
+        prow.addWidget(QLabel("ふつうの反応:"))
         self.spChars = QSpinBox()
         self.spChars.setRange(0, 500)
         self.spChars.setSuffix(" 文字")
         self.spChars.setSpecialValueText("制限なし")
         self.spChars.setMinimumHeight(30)
         self.spChars.setToolTip(
-            "ふつうの反応 (コメントへのツッコミ等) をコード側で詰める上限。文の区切りで切ります。\n"
-            "システムプロンプトの「20 文字前後」とは別の、最終的な安全弁 (owakusa.ini [llm] max_chars)。\n"
-            "長い返答にしたいときはプロンプトの指示と一緒にここも増やしてください。0 = 詰めない。")
+            "ふつうの反応 (コメントへのツッコミ・入室のあいさつ・時報など、名前を呼ばれていないとき) の文字数上限。\n"
+            "40 より大きくすると「最大 n 文字まで話してよい」という指示がシステムプロンプトに自動で足され、\n"
+            "LLM の出力トークン上限もそれに合わせて広がります (owakusa.ini [llm] max_chars)。0 = 制限なし。\n"
+            "既定 40。それでも短いときはプロンプト本文の「20 文字前後」「1 文」の指示を書き換えてください。")
         prow.addWidget(self.spChars)
         prow.addSpacing(8)
         prow.addWidget(QLabel("呼びかけへの返答:"))
@@ -563,7 +564,9 @@ class PromptDialog(QDialog):
         self.spCharsCmd.setSuffix(" 文字")
         self.spCharsCmd.setSpecialValueText("制限なし")
         self.spCharsCmd.setMinimumHeight(30)
-        self.spCharsCmd.setToolTip("名前で呼ばれたとき (質問への答え・画面操作の一言) の上限 (owakusa.ini [llm] max_chars_command)。")
+        self.spCharsCmd.setToolTip(
+            "名前で呼ばれたとき (「おわくさ、◯◯教えて」への答え、画面操作や遊びの一言) の文字数上限。\n"
+            "60 より大きくすると同様にプロンプトへ指示が足されます (owakusa.ini [llm] max_chars_command)。0 = 制限なし。")
         prow.addWidget(self.spCharsCmd)
         prow.addStretch(1)
         v.addLayout(prow)
@@ -739,7 +742,7 @@ class PromptDialog(QDialog):
             pass
         self.lblInfo.setText(
             f"{res.get('name', 'おわくさ')} / モデル {res.get('model', '?')} / いまのプロンプト: {src} / "
-            f"{len(prompt)} 文字 / 返答の長さ {res.get('max_chars', '?')} 文字 (呼びかけ時 {res.get('max_chars_command', '?')})"
+            f"{len(prompt)} 文字 / 長さ上限: ふつうの反応 {res.get('max_chars', '?')} 文字, 呼びかけ時 {res.get('max_chars_command', '?')} 文字"
             + (f" / 口調指定中: {res['style']}" if res.get("style") else ""))
         if op == "get":
             self._set_status("✔ 取得しました。書き換えて「設定」で反映します。")
