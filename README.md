@@ -167,7 +167,7 @@ http://192.168.1.23:8080/
   Pococha 風に上へ流れるフィードが既定）。おわくさの `marquee` 命令はモードに関係なく
   その文だけ横に流れ、他の返答はフィードに残ります。
 - `COMMENT モード (おわくさ AI フィード)` 欄
-  - `文字サイズ` 50〜500%（横スクロールと同じ基準。100% = `marquee_size`）。
+  - `文字サイズ` 25〜500%（横スクロールと同じ基準。100% = `marquee_size`）。
     横スクロールと違い、変更しても表示中の行は消えず、新しいサイズで折り返し直されます。
     起動時の値は `comment_size_pct`（未指定なら `marquee_size_pct`）。
   - `最大行数` — 画面に保持するエントリ数。超えた分は古い方から消えます（`comment_max_lines`）。
@@ -532,7 +532,7 @@ marquee_pin_sec = 3.0      ; <ue>/<shita> 固定表示の秒数
 
 # ---- COMMENT mode (おわくさ AI フィード) ----
 text_mode = comment        ; 起動時の文字表示モード comment (既定) / marquee
-comment_size_pct = 150     ; フィード文字サイズ (50..500, 100 = marquee_size)。未指定なら marquee_size_pct
+comment_size_pct = 40      ; フィード文字サイズ (25..500, 100 = marquee_size)。未指定なら marquee_size_pct
 comment_max_lines = 12     ; 画面に保持する行(エントリ)数
 comment_ttl_sec = 0        ; 各行の表示秒数 (0 = 上に押し出されるまで残す)
 comment_width_pct = 92     ; 行の最大幅 (画面幅 %)

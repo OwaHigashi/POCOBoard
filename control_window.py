@@ -923,7 +923,7 @@ class ControlWindow(QWidget):
 
         g.addWidget(QLabel("文字サイズ:"), 0, 0)
         self.spCmScale = QSpinBox()
-        self.spCmScale.setRange(50, 500)
+        self.spCmScale.setRange(25, 500)
         self.spCmScale.setSingleStep(10)
         self.spCmScale.setSuffix(" %")
         self.spCmScale.setMinimumHeight(30)
@@ -1858,7 +1858,7 @@ class ControlWindow(QWidget):
                 cur = (self.display.comment_scale() if t == "comment"
                        else self.display._marquee.scale)
                 pct = c["pct"] if "pct" in c else int(round(cur * 100)) + c["delta"]
-                pct = max(50, min(500, int(pct)))
+                pct = max(25, min(500, int(pct)))
                 sp = self.spCmScale if t == "comment" else self.spMqScale
                 sp.setValue(pct)   # valueChanged → display setter + log
         elif cmd == "fx":

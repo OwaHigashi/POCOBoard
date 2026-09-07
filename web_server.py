@@ -711,7 +711,7 @@ class _Handler(BaseHTTPRequestHandler):
             delta = c.get("delta")
             try:
                 if pct is not None:
-                    out["pct"] = max(50, min(500, int(pct)))
+                    out["pct"] = max(25, min(500, int(pct)))
                 elif delta is not None:
                     out["delta"] = max(-450, min(450, int(delta)))
                 else:

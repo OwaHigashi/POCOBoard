@@ -266,7 +266,7 @@ def main() -> int:
     display.set_camera_poll_fps(float(camera_poll_fps))
     display.set_marquee_scroll_pps(float(marquee_scroll_pps))
     display.set_marquee_pin_sec(marquee_pin_sec)
-    display.set_comment_scale(max(50, min(500, comment_size_pct)) / 100.0)
+    display.set_comment_scale(max(25, min(500, comment_size_pct)) / 100.0)
     display.set_comment_max_entries(max(1, min(60, comment_max_lines)))
     display.set_comment_ttl_sec(max(0.0, comment_ttl_sec))
     display.set_comment_layout(max(20, min(100, comment_width_pct)) / 100.0,
