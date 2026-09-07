@@ -485,12 +485,12 @@ class _UserRow(QWidget):
 #  Main control window
 # ============================================================
 class PromptDialog(QDialog):
-    """おわくさ (POCOMon scripts/owakusa.py) のシステムプロンプト・名前・返答の長さを、動作中に 取得 / 設定 する。
+    """おわくさ (POCOMon scripts/owakusa.py) のシステムプロンプトと名前を、動作中に 取得 / 設定 する。
 
     おわくさは POST /ai のたびにヘッダ X-Poco-AI-Url で自分の制御口 (既定 http://<IP>:8765)
     を名乗る。ここはその URL に
-      GET /prompt          取得 (現在のシステムプロンプト / 名前 / 返答の長さ)
-      PUT /prompt {prompt, name, max_chars, max_chars_command}
+      GET /prompt          取得 (現在のシステムプロンプト / 名前)
+      PUT /prompt {prompt, name}
                            設定 (次の返答から効く)。{"reset": true} で起動時の既定に戻す。
                            {"save": true} で owakusa 側のファイルにも書き、再起動後も残す
     を投げる。config.ini の ai_token を設定していれば同じ値を X-Poco-AI-Token で送る。
@@ -544,30 +544,6 @@ class PromptDialog(QDialog):
             "変えると「こんぴーた、画面消して」のように新しい名前で呼べます (おわくさ等の元の名前でも反応)。\n"
             "システムプロンプト側は書き換えなくても、おわくさが読み替えの一文を自動で足します。")
         prow.addWidget(self.edName)
-        prow.addSpacing(12)
-        prow.addWidget(QLabel("ふつうの反応:"))
-        self.spChars = QSpinBox()
-        self.spChars.setRange(0, 500)
-        self.spChars.setSuffix(" 文字")
-        self.spChars.setSpecialValueText("制限なし")
-        self.spChars.setMinimumHeight(30)
-        self.spChars.setToolTip(
-            "ふつうの反応 (コメントへのツッコミ・入室のあいさつ・時報など、名前を呼ばれていないとき) の文字数上限。\n"
-            "40 より大きくすると「最大 n 文字まで話してよい」という指示がシステムプロンプトに自動で足され、\n"
-            "LLM の出力トークン上限もそれに合わせて広がります (owakusa.ini [llm] max_chars)。0 = 制限なし。\n"
-            "既定 40。それでも短いときはプロンプト本文の「20 文字前後」「1 文」の指示を書き換えてください。")
-        prow.addWidget(self.spChars)
-        prow.addSpacing(8)
-        prow.addWidget(QLabel("呼びかけへの返答:"))
-        self.spCharsCmd = QSpinBox()
-        self.spCharsCmd.setRange(0, 500)
-        self.spCharsCmd.setSuffix(" 文字")
-        self.spCharsCmd.setSpecialValueText("制限なし")
-        self.spCharsCmd.setMinimumHeight(30)
-        self.spCharsCmd.setToolTip(
-            "名前で呼ばれたとき (「おわくさ、◯◯教えて」への答え、画面操作や遊びの一言) の文字数上限。\n"
-            "60 より大きくすると同様にプロンプトへ指示が足されます (owakusa.ini [llm] max_chars_command)。0 = 制限なし。")
-        prow.addWidget(self.spCharsCmd)
         prow.addStretch(1)
         v.addLayout(prow)
 
@@ -575,7 +551,8 @@ class PromptDialog(QDialog):
         self.editor = QPlainTextEdit()
         self.editor.setPlaceholderText(
             "「取得」を押すと、いま動いているおわくさのシステムプロンプト (人格部分) がここに入ります。\n"
-            "書き換えて「設定」を押すと、名前・返答の長さと一緒に次の返答から効きます。")
+            "書き換えて「設定」を押すと次の返答から効きます。返答の長さもこの文章で決まります\n"
+            "(「1 文・20 文字前後、長くても 35 文字」の行を書き換える)。")
         f = QFont("Segoe UI", 11)
         self.editor.setFont(f)
         self.editor.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
@@ -602,7 +579,7 @@ class PromptDialog(QDialog):
         self.btnSet.clicked.connect(self.apply)
         row2.addWidget(self.btnSet)
         self.btnReset = QPushButton("既定に戻す")
-        self.btnReset.setToolTip("内蔵既定のシステムプロンプトと、起動時の名前・返答の長さ (owakusa.ini) に戻します。")
+        self.btnReset.setToolTip("内蔵既定のシステムプロンプトと、起動時の名前 (owakusa.ini) に戻します。")
         self.btnReset.setMinimumHeight(34)
         self.btnReset.clicked.connect(self.reset)
         row2.addWidget(self.btnReset)
@@ -610,7 +587,7 @@ class PromptDialog(QDialog):
         self.chkSave = QCheckBox("おわくさ側にファイル保存 (再起動後も有効)")
         self.chkSave.setToolTip(
             "ON にして「設定」すると owakusa 側のファイル (system_prompt.txt / owakusa_overrides.json) にも書き、\n"
-            "owakusa.py を起動し直しても同じプロンプト・名前・長さで始まります。\n"
+            "owakusa.py を起動し直しても同じプロンプト・名前で始まります。\n"
             "「既定に戻す」+ ON でそのファイルを消します。OFF なら今回の起動中だけ有効。")
         row2.addWidget(self.chkSave)
         row2.addStretch(1)
@@ -677,8 +654,6 @@ class PromptDialog(QDialog):
             return
         payload = {"prompt": text,
                    "name": self.edName.text().strip() or None,
-                   "max_chars": int(self.spChars.value()),
-                   "max_chars_command": int(self.spCharsCmd.value()),
                    "save": self.chkSave.isChecked()}
         self._request("set", "PUT", "/prompt", payload)
 
@@ -735,26 +710,18 @@ class PromptDialog(QDialog):
         self.editor.setPlainText(prompt)
         self._loaded_prompt = prompt
         self.edName.setText(str(res.get("name", "")))
-        try:
-            self.spChars.setValue(int(res.get("max_chars", 0)))
-            self.spCharsCmd.setValue(int(res.get("max_chars_command", 0)))
-        except (TypeError, ValueError):
-            pass
         self.lblInfo.setText(
             f"{res.get('name', 'おわくさ')} / モデル {res.get('model', '?')} / いまのプロンプト: {src} / "
-            f"{len(prompt)} 文字 / 長さ上限: ふつうの反応 {res.get('max_chars', '?')} 文字, 呼びかけ時 {res.get('max_chars_command', '?')} 文字"
-            + (f" / 口調指定中: {res['style']}" if res.get("style") else ""))
+            f"{len(prompt)} 文字" + (f" / 口調指定中: {res['style']}" if res.get("style") else ""))
         if op == "get":
             self._set_status("✔ 取得しました。書き換えて「設定」で反映します。")
             self._log("AI/PROMPT", f"GET  {len(prompt)} 文字 ({res.get('source')})")
         elif op == "set":
             saved = res.get("saved")
             self._set_status("✔ 設定しました。次の返答から効きます。" + (f"  保存: {saved}" if saved else "  (今回の起動中のみ)"))
-            self._log("AI/PROMPT", f"SET  {len(prompt)} 文字 name={res.get('name')} "
-                                   f"chars={res.get('max_chars')}/{res.get('max_chars_command')}"
-                                   f"{'  saved=' + str(saved) if saved else ''}")
+            self._log("AI/PROMPT", f"SET  {len(prompt)} 文字 name={res.get('name')}{'  saved=' + str(saved) if saved else ''}")
         else:
-            self._set_status("✔ 起動時の既定 (プロンプト・名前・長さ) に戻しました。"
+            self._set_status("✔ 起動時の既定 (プロンプト・名前) に戻しました。"
                              + ("  保存ファイルも消しました。" if "removed" in str(res.get("saved") or "") else ""))
             self._log("AI/PROMPT", "RESET")
 
@@ -1266,9 +1233,9 @@ class ControlWindow(QWidget):
         g.addLayout(row, 2, 0, 1, 4)
 
         row3 = QHBoxLayout()
-        self.btnPrompt = QPushButton("🧠 システムプロンプト編集…  (名前・返答の長さも)")
+        self.btnPrompt = QPushButton("🧠 システムプロンプト編集…  (名前も)")
         self.btnPrompt.setToolTip(
-            "動作中のおわくさ (owakusa.py) のシステムプロンプト・名前・返答の長さを 取得 / 設定 します。\n"
+            "動作中のおわくさ (owakusa.py) のシステムプロンプトと名前を 取得 / 設定 します。\n"
             "おわくさが POST /ai を送ってくると場所 (X-Poco-AI-Url) が自動で分かります。")
         self.btnPrompt.setMinimumHeight(32)
         self.btnPrompt.clicked.connect(self._open_prompt_dialog)
