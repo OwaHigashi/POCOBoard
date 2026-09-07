@@ -463,6 +463,12 @@ class DisplayWindow(QWidget):
     def set_comment_ttl_sec(self, sec: float) -> None:
         self._feed.set_ttl(float(sec))
 
+    def set_comment_spacing(self, spacing: float) -> None:
+        """Vertical packing of the feed (comment_spacing_pct / 100).
+        Entries are re-laid out, not cleared."""
+        self._feed.set_spacing(float(spacing))
+        self._dirty = True
+
     def set_comment_bg_opacity(self, opacity: float) -> None:
         self._feed.bg_alpha = max(0.0, min(1.0, float(opacity)))
         self._dirty = True

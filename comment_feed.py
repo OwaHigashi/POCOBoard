@@ -117,6 +117,11 @@ class CommentFeed:
         self.bg_alpha: float = 0.45      # comment_bg_pct
         self.scroll_ms: float = 350.0    # comment_scroll_ms
         self.show_time: bool = False     # comment_show_time
+        # comment_spacing_pct / 100.  Scales the three vertical gaps
+        # (plate padding, wrapped-line gap, gap between entries) together.
+        # 1.0 = the original roomy look; 0.4 (default) packs ~2.5x tighter
+        # so more comments fit on screen.
+        self.spacing: float = 0.4
         # Animation: pixels the stack still has to travel upward.
         self._offset: float = 0.0
         self._font_cache: dict[tuple[float, bool], QFont] = {}
@@ -130,6 +135,13 @@ class CommentFeed:
             return
         self.scale = new
         self._font_cache.clear()
+        self._layout_gen += 1
+
+    def set_spacing(self, spacing: float) -> None:
+        new = max(0.0, min(2.0, float(spacing)))
+        if abs(new - self.spacing) < 1e-3:
+            return
+        self.spacing = new
         self._layout_gen += 1
 
     def set_max_entries(self, n: int) -> None:
@@ -194,10 +206,10 @@ class CommentFeed:
         return fm
 
     def _line_gap(self) -> float:
-        return max(2.0, self.base_font.pixelSize() * self.scale * 0.18)
+        return max(1.0, self.base_font.pixelSize() * self.scale * 0.18 * self.spacing)
 
     def _pad(self) -> float:
-        return max(4.0, self.base_font.pixelSize() * self.scale * 0.22)
+        return max(2.0, self.base_font.pixelSize() * self.scale * 0.22 * self.spacing)
 
     # ---------- layout (word/char wrap) ----------
     def _segments(self, e: Entry) -> list[_Seg]:
@@ -295,7 +307,7 @@ class CommentFeed:
 
     # ---------- animation ----------
     def _entry_gap(self) -> float:
-        return max(3.0, self.base_font.pixelSize() * self.scale * 0.12)
+        return max(1.0, self.base_font.pixelSize() * self.scale * 0.12 * self.spacing)
 
     def _max_width(self, area_w: float) -> float:
         return max(40.0, area_w * self.width_frac - self._pad() * 2)

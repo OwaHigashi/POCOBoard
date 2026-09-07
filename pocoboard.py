@@ -106,10 +106,13 @@ def main() -> int:
     marquee_scroll_pps = cfg.get_int("marquee_scroll_pps", 320)
     marquee_pin_sec    = cfg.get_float("marquee_pin_sec", 3.0)
     # COMMENT mode (おわくさ AI feed, comment_feed.py).  text_mode picks
-    # where generic text lands at boot: 'marquee' (legacy Niconico lanes)
-    # or 'comment' (upward feed).  comment_size_pct follows the marquee
-    # size convention (100 = marquee_size); falls back to marquee_size_pct.
-    text_mode          = cfg.get_str("text_mode", "marquee").strip().lower()
+    # where generic text lands at boot: 'comment' (upward feed, default —
+    # Pococha-style: new lines push old ones up and out) or 'marquee'
+    # (legacy Niconico lanes; a marquee that scrolls off is gone for good).
+    # AI "marquee" commands still fly as lanes in either mode.
+    # comment_size_pct follows the marquee size convention
+    # (100 = marquee_size); falls back to marquee_size_pct.
+    text_mode          = cfg.get_str("text_mode", "comment").strip().lower()
     comment_size_pct   = cfg.get_int("comment_size_pct", marquee_size_pct)
     comment_max_lines  = cfg.get_int("comment_max_lines", 12)
     comment_ttl_sec    = cfg.get_float("comment_ttl_sec", 0.0)
@@ -119,6 +122,7 @@ def main() -> int:
     comment_bg_pct     = cfg.get_int("comment_bg_pct", 45)
     comment_scroll_ms  = cfg.get_int("comment_scroll_ms", 350)
     comment_show_time  = cfg.get_bool("comment_show_time", False)
+    comment_spacing_pct = cfg.get_int("comment_spacing_pct", 40)
     # Shared secret for POST /ai (empty = any LAN client may drive the AI
     # screen buffer).  The おわくさ script sends it as X-Poco-AI-Token.
     ai_token           = cfg.get_str("ai_token", "")
@@ -271,6 +275,7 @@ def main() -> int:
     display.set_comment_bg_opacity(max(0, min(100, comment_bg_pct)) / 100.0)
     display.set_comment_scroll_ms(float(comment_scroll_ms))
     display.set_comment_show_time(comment_show_time)
+    display.set_comment_spacing(max(0, min(200, comment_spacing_pct)) / 100.0)
     display.set_text_mode("comment" if text_mode.startswith("c") else "marquee")
     bridge.set_text_mode(display.text_mode())
     display.set_hstretch_preset(
