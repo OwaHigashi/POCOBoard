@@ -18,7 +18,7 @@ import signal
 import socket
 import sys
 
-from PySide6.QtCore    import Qt, QTimer
+from PySide6.QtCore    import Qt, QTimer, QLoggingCategory
 from PySide6.QtGui     import QFont, QGuiApplication, QIcon
 from PySide6.QtWidgets import QApplication, QMessageBox
 
@@ -186,6 +186,12 @@ def main() -> int:
     # ----- Qt app -----
     # Tell Qt we want HiDPI + smooth scaling (Windows 11 mixed-DPI rigs).
     os.environ.setdefault("QT_ENABLE_HIGHDPI_SCALING", "1")
+    # Silence Qt's font-fallback chatter. Viewer names/comments contain
+    # decorative Unicode (Tamil, Oriya, Yi, ...); for each such script Qt
+    # probes every installed font and logs "OpenType support missing for
+    # ..." plus DirectWrite failures on legacy .fon fonts (Modern, MS Sans
+    # Serif, Roman, Script). Harmless, but it floods the console.
+    QLoggingCategory.setFilterRules("qt.text.font.db=false\nqt.qpa.fonts=false")
     app = QApplication(sys.argv)
     app.setApplicationName("POCOBoard")
     # Window / taskbar icon. When frozen, PyInstaller places data files
