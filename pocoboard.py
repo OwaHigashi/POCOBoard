@@ -123,6 +123,9 @@ def main() -> int:
     comment_scroll_ms  = cfg.get_int("comment_scroll_ms", 350)
     comment_show_time  = cfg.get_bool("comment_show_time", False)
     comment_spacing_pct = cfg.get_int("comment_spacing_pct", 40)
+    # How many text-board lines the browser UI can scroll back through
+    # (GET /board).  Kept in RAM only; the buffer resets on restart.
+    text_log_max       = cfg.get_int("text_log_max", 500)
     # Shared secret for POST /ai (empty = any LAN client may drive the AI
     # screen buffer).  The おわくさ script sends it as X-Poco-AI-Token.
     ai_token           = cfg.get_str("ai_token", "")
@@ -228,6 +231,7 @@ def main() -> int:
     bridge.set_upload_limits(upload_image_mb, upload_video_mb, upload_audio_mb)
     bridge.set_ai_token(ai_token)
     bridge.set_ai_url(ai_url)
+    bridge.set_board_max(text_log_max)
 
     audio = AudioEngine()
     audio.set_fx_volume(startup_fx_volume)
@@ -363,6 +367,10 @@ def main() -> int:
                                     display.add_marquee(text, speed))
     bridge.marqueeStop.connect(lambda cid, label, ip: display.stop_marquee())
     display.marqueeStatusChanged.connect(ctrl.on_marquee_changed)
+    # Every line that lands on the text board (AI comments / replies,
+    # viewer marquees, operator lines, clears) is mirrored into the
+    # bridge's scroll-back buffer so browsers can re-read it (GET /board).
+    display.textShown.connect(bridge.record_text)
     # おわくさ AI (POST /ai) — executed on the Qt thread by the control
     # window, which also routes 'say' to the active MARQUEE / COMMENT mode.
     bridge.aiRequested.connect(ctrl.on_ai_command)

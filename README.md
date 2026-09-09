@@ -300,6 +300,14 @@ http://192.168.1.23:8080/
 - 自分が出したメディアの取消
   - 種類別: `画像を消す` / `動画を止める` / `音声を止める`
   - 一括: `自分のぜんぶ取消` （再生中・キュー待ち両方を一掃）
+- 画面の文字ログ
+  - 画面に出たコメント・おわくさの返答・突っ込み・横スクロール文字が、出た順にそのまま並びます。
+    画面上では流れて消えても、ここでいつでも遡って読み返せます。
+  - 名前の色（視聴者 / AI / 情報）や `<r>` `<big>` などの装飾は画面と同じ見た目で再現。
+    「画面消して」で消した位置には `CLEAR` の区切り線が入ります。
+  - 新着は自動で最下部に追従（`自動で追う`）。上に遡っている間は追従せず `▼ 新着があります` の
+    ボタンだけ出るので、読んでいる途中で飛ばされません。`たたむ` で折りたためます。
+  - 遡れる行数は `config.ini` の `text_log_max`（既定 500）。メモリ上のみで、再起動で消えます。
 
 ### TALK について
 
@@ -406,6 +414,7 @@ http://<IP>:<port>/
 | POST | `/marquee/stop` | - | 横スクロール停止 |
 | POST | `/ai` | JSON（下記） | おわくさ AI の画面操作。`X-Poco-AI-Token` ヘッダ（`ai_token` 設定時） |
 | GET | `/ai/status` | - | `{mode, comment:{count,size_pct}, marquee:{used,size_pct}, last_ai_ms, ai_url}` |
+| GET | `/board?since=N&limit=500` | - | 画面の文字ログ。id が `N` より新しい行を返す `{epoch, last, mode, items:[{id, t, src, who, text, kind}]}`。`src` = `comment` / `marquee` / `clear`、`text` は装飾タグ付きの原文。`epoch` は起動ごとに変わる（再起動検知用） |
 | POST | `/name` | `{"name":"Alice"}` | 表示名保存 |
 | POST | `/upload?type=image|video|audio&filename=...` | raw binary | メディアアップロード |
 | POST | `/my/stop?kind=image|video|audio|all` | - | 自分のメディアだけ止める |
@@ -557,6 +566,7 @@ comment_bg_pct = 45        ; 行の背景 (半透明の黒) の濃さ 0..100
 comment_scroll_ms = 350    ; 新着時に上へ滑るアニメの時間
 comment_show_time = false  ; 行頭に時刻 (HH:MM) を付ける
 comment_spacing_pct = 40   ; 行間の詰め具合 (0..200)。100 = 旧来のゆったり、40 で約 2.5 倍詰まる
+text_log_max = 500         ; ブラウザ UI「画面の文字ログ」(GET /board) が遡れる行数 (10..5000)。メモリ上のみ
 ;ai_token =                ; POST /ai の共有トークン。空なら LAN 内の誰でも AI 操作可
 ;ai_url =                  ; おわくさの制御口 (GET/PUT /prompt)。通常は空: POST /ai のヘッダ X-Poco-AI-Url で毎回名乗る
 ```

@@ -20,6 +20,11 @@ Endpoints:
                          the control window's システムプロンプト編集 dialog
                          talks to that URL (GET/PUT /prompt).
   GET  /ai/status        JSON: text mode, feed count, sizes, ai_url
+  GET  /board?since=N    JSON: everything the text board has shown (AI
+                         comments / replies, viewer marquees, operator
+                         lines) newer than entry id N — a scroll-back
+                         history for the browser UI.  {epoch, last,
+                         mode, items:[{id, t, src, who, text, kind}]}
   POST /name             persist display name (sets `poco_name` cookie)
   POST /upload           upload a media file (image / video / audio)
                          ?type=image|video|audio&filename=foo.jpg
@@ -46,7 +51,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing      import Optional
 from urllib.parse import urlparse, parse_qs, quote, unquote
 
-from PySide6.QtCore import QObject, QTimer, Signal
+from PySide6.QtCore import QObject, QTimer, Signal, Slot
 
 from webpage import INDEX_HTML
 
@@ -132,6 +137,13 @@ class WebBridge(QObject):
         # Control endpoint of the AI (おわくさ) — from config ai_url, then
         # overwritten by the X-Poco-AI-Url header of every /ai request.
         self._ai_url = ""
+        # Scroll-back history of everything the text board has shown
+        # (fed by DisplayWindow.textShown).  Monotonic ids let browsers
+        # poll GET /board?since=<last id>; _board_epoch changes on every
+        # process start so a client can detect a restart and reset.
+        self._board: deque = deque(maxlen=500)
+        self._board_seq = 0
+        self._board_epoch = int(time.time())
         # Known clients — client_id -> {name, last_seen_ms, ip, blocked}
         self._clients: dict[str, dict] = {}
         # IPs blocked outright (operator action).  Checked alongside the
@@ -273,6 +285,39 @@ class WebBridge(QObject):
     def note_ai(self) -> None:
         with self._lock:
             self._last_ai_ms = time.time() * 1000
+
+    # ---- text-board history (GET /board) ----
+    def set_board_max(self, n: int) -> None:
+        n = max(10, min(5000, int(n)))
+        with self._lock:
+            if n != self._board.maxlen:
+                self._board = deque(self._board, maxlen=n)
+
+    @Slot(str, str, str, str)
+    def record_text(self, src: str, who: str, text: str, kind: str) -> None:
+        """Remember one line the display just showed (Qt thread)."""
+        with self._lock:
+            self._board_seq += 1
+            self._board.append({
+                "id":   self._board_seq,
+                "t":    time.strftime("%H:%M:%S"),
+                "src":  src,
+                "who":  who or "",
+                "text": text or "",
+                "kind": kind or "text",
+            })
+
+    def board_since(self, since: int, limit: int = 500) -> dict:
+        with self._lock:
+            items = [e for e in self._board if e["id"] > since]
+            if len(items) > limit:
+                items = items[-limit:]
+            return {
+                "epoch": self._board_epoch,
+                "last":  self._board_seq,
+                "mode":  self._text_mode,
+                "items": items,
+            }
 
     def is_piano_mode(self) -> bool:
         with self._lock:
@@ -655,6 +700,23 @@ class _Handler(BaseHTTPRequestHandler):
             snap = self.bridge.ai_snapshot()
             snap["ok"] = True
             self._send_json(200, snap)
+            return
+        if u.path == "/board":
+            # Read-only scroll-back of the text board.  Not gated by the
+            # ACCEPT switch or client blocks — it only mirrors what is
+            # already on the public screen.
+            q = parse_qs(u.query or "")
+            try:
+                since = max(0, int(q.get("since", ["0"])[0]))
+            except (TypeError, ValueError):
+                since = 0
+            try:
+                limit = max(1, min(1000, int(q.get("limit", ["500"])[0])))
+            except (TypeError, ValueError):
+                limit = 500
+            out = self.bridge.board_since(since, limit)
+            out["ok"] = True
+            self._send_json(200, out)
             return
         self._send_json(404, {"ok": False, "reason": "not_found"})
 

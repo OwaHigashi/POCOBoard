@@ -47,6 +47,11 @@ class DisplayWindow(QWidget):
     # COMMENT mode (おわくさ AI feed): buffer size changed / text mode flipped
     commentCountChanged = Signal(int)
     textModeChanged     = Signal(str)         # 'marquee' | 'comment'
+    # Fired whenever a piece of text actually lands on the screen —
+    # (src, who, text, kind); src = 'comment' | 'marquee' | 'clear'.
+    # The web bridge records these so browsers can scroll back through
+    # everything the text board has shown (GET /board).
+    textShown           = Signal(str, str, str, str)
     # Emitted whenever the "owner" (uploader client_id) of a currently
     # visible media slot changes.  args = (kind, owner_cid_or_empty)
     # kind ∈ {'image', 'video'}.  Lets WebBridge know who is allowed to
@@ -410,6 +415,8 @@ class DisplayWindow(QWidget):
         res = self._marquee.add(text, vw, vh, speed)
         self._emit_marquee_status()
         self._mark_activity()
+        if res == "OK":
+            self.textShown.emit("marquee", "", text, "text")
         return res
 
     @Slot()
@@ -440,13 +447,18 @@ class DisplayWindow(QWidget):
         res = self._feed.add(text, who=who, kind=kind, area_w=vw)
         self._emit_comment_status()
         self._mark_activity()
+        if res == "OK":
+            self.textShown.emit("comment", who or "", text, kind or "text")
         return res
 
     @Slot()
     def clear_comments(self) -> None:
+        had = self._feed.count() > 0
         self._feed.clear()
         self._emit_comment_status()
         self._dirty = True
+        if had:
+            self.textShown.emit("clear", "", "", "info")
 
     def comment_count(self) -> int:
         return self._feed.count()

@@ -211,7 +211,8 @@ INDEX_HTML = r"""<!doctype html>
   .talk-box,
   .marquee-box,
   .upload-box,
-  .mine-box {
+  .mine-box,
+  .board-box {
     grid-column: 1 / -1;
     display: grid;
     gap: 8px;
@@ -226,7 +227,8 @@ INDEX_HTML = r"""<!doctype html>
   .talk-box::before,
   .marquee-box::before,
   .upload-box::before,
-  .mine-box::before {
+  .mine-box::before,
+  .board-box::before {
     content: "";
     position: absolute;
     inset: 0 0 auto 0;
@@ -239,6 +241,121 @@ INDEX_HTML = r"""<!doctype html>
     padding: 12px 10px;
     font-size: clamp(20px, 3.4vw, 30px);
   }
+  /* ---- 画面の文字ログ (scroll-back of everything the text board showed) ---- */
+  .board-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .board-head strong { font-size: 15px; }
+  .board-head .spacer { flex: 1; }
+  .board-head label {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 13px;
+    color: var(--muted);
+    user-select: none;
+  }
+  .board-head button {
+    padding: 6px 12px;
+    border-radius: 10px;
+    border: 1px solid var(--line-strong);
+    background: #fffdfa;
+    color: var(--text);
+    font-size: 13px;
+    cursor: pointer;
+  }
+  .board-head button:active { transform: translateY(1px); }
+  #boardCount { font-size: 12px; color: var(--muted); }
+  #boardList {
+    height: 300px;
+    min-height: 120px;
+    max-height: 80vh;
+    resize: vertical;
+    overflow-y: auto;
+    overflow-x: hidden;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+    padding: 10px 12px;
+    border-radius: 16px;
+    background: #1d1a17;                 /* dark plate: the colours match the screen */
+    border: 1px solid #3a342e;
+    box-shadow: inset 0 2px 10px rgba(0,0,0,.35);
+    font-size: 15px;
+    line-height: 1.45;
+    color: #f4f1ec;
+    word-break: break-word;
+    overflow-wrap: anywhere;
+  }
+  #boardList:empty::before {
+    content: "まだ何も表示されていません";
+    color: #8a827a;
+    font-size: 13px;
+  }
+  .bd {
+    display: grid;
+    grid-template-columns: auto auto 1fr;
+    gap: 0 8px;
+    align-items: baseline;
+    padding: 3px 2px;
+    border-bottom: 1px solid rgba(255,255,255,.05);
+    animation: bd-in .25s ease both;
+  }
+  .bd:last-child { border-bottom: none; }
+  @keyframes bd-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+  .bd .t {
+    font-family: Consolas, "Cascadia Code", monospace;
+    font-size: 11px;
+    color: #8a827a;
+    white-space: nowrap;
+  }
+  .bd .src {
+    font-size: 11px;
+    padding: 1px 6px;
+    border-radius: 999px;
+    white-space: nowrap;
+    border: 1px solid rgba(255,255,255,.14);
+    color: #d8d2ca;
+  }
+  .bd.src-marquee .src { border-color: rgba(255,200,120,.4); color: #f2c78a; }
+  .bd.src-clear { opacity: .7; }
+  .bd.src-clear .body { color: #a49a90; font-size: 13px; letter-spacing: .05em; }
+  .bd .body { min-width: 0; }
+  .bd .who { font-weight: 700; margin-right: 6px; }
+  .bd.kind-viewer .who { color: #78ebeb; }
+  .bd.kind-ai     .who { color: #ffe65a; }
+  .bd.kind-info   .who { color: #b4b4c8; }
+  .bd.kind-text   .who { color: #ffffff; }
+  .bd.kind-info .body { color: #c8c8d7; }
+  .bd .body u { text-decoration: underline; }
+  .bd .body .hl { background: rgba(255, 230, 90, .85); color: #241f18; padding: 0 3px; border-radius: 3px; }
+  .bd .pin {
+    font-size: 10px;
+    color: #a49a90;
+    margin-left: 6px;
+    border: 1px solid rgba(255,255,255,.14);
+    border-radius: 4px;
+    padding: 0 4px;
+    vertical-align: middle;
+  }
+  .board-new {
+    position: sticky;
+    bottom: 6px;
+    display: none;
+    margin: 0 auto;
+    width: max-content;
+    padding: 5px 12px;
+    border-radius: 999px;
+    background: rgba(255, 230, 90, .92);
+    color: #241f18;
+    font-size: 12px;
+    font-weight: 700;
+    cursor: pointer;
+    box-shadow: 0 6px 16px rgba(0,0,0,.35);
+  }
+  .board-new.show { display: block; }
   .mine-box {
     background: rgba(255, 249, 246, 0.94);
     display: none;
@@ -441,7 +558,10 @@ INDEX_HTML = r"""<!doctype html>
       white-space: normal;
       padding: 4px;
     }
-    .marquee-box, .upload-box, .mine-box { padding: 14px; border-radius: 18px; }
+    .marquee-box, .upload-box, .mine-box, .board-box { padding: 14px; border-radius: 18px; }
+    #boardList { height: 240px; font-size: 14px; }
+    .bd { grid-template-columns: auto 1fr; }
+    .bd .src { display: none; }
     .marquee-row { gap: 6px; }
     .marquee-row button {
       padding: 10px 12px;
@@ -569,6 +689,22 @@ INDEX_HTML = r"""<!doctype html>
       <span class="sep"></span>
       <button class="send" id="btnMqSend">流す</button>
       <button class="stop" id="btnMqStop">停止</button>
+    </div>
+  </div>
+
+  <div class="board-box" id="boardBox">
+    <div class="board-head">
+      <strong>💬 画面の文字ログ</strong>
+      <span id="boardCount"></span>
+      <span class="spacer"></span>
+      <label title="新着が来たら自動で最下部へスクロール"><input type="checkbox" id="boardFollow" checked> 自動で追う</label>
+      <button id="btnBoardBottom" title="最新へ">⤓ 最新へ</button>
+      <button id="btnBoardHide">たたむ</button>
+    </div>
+    <div id="boardList"></div>
+    <div class="board-new" id="boardNew">▼ 新着があります</div>
+    <div style="font-size:12px; opacity:.75;">
+      ※ 画面に出たコメント・返答・横スクロール文字がそのまま残ります。流れて読めなくてもここで遡れます。
     </div>
   </div>
 </main>
@@ -1115,8 +1251,143 @@ document.getElementById('upImage').addEventListener('change', e => handleUpload(
 document.getElementById('upVideo').addEventListener('change', e => handleUpload(e.target, 'video'));
 document.getElementById('upAudio').addEventListener('change', e => handleUpload(e.target, 'audio'));
 
+// ============ 画面の文字ログ (GET /board) ============
+// Everything the text board shows (AI comments / replies, viewer
+// marquees, operator lines) is kept on the host in a ring buffer with
+// monotonic ids.  We poll for ids newer than the last one we have and
+// append, so scrolling back through older lines is never disturbed.
+const boardList  = document.getElementById('boardList');
+const boardNew   = document.getElementById('boardNew');
+const boardCount = document.getElementById('boardCount');
+const boardFollow = document.getElementById('boardFollow');
+let boardLast  = 0;
+let boardEpoch = null;
+let boardTotal = 0;
+let boardHidden = false;
+const BOARD_KEEP = 1000;      // DOM rows kept per page
+
+const BOARD_COLORS = {
+  r:'#ff4646', red:'#ff4646', g:'#5aeb5a', green:'#5aeb5a', b:'#6e96ff', blue:'#6e96ff',
+  y:'#ffe65a', yellow:'#ffe65a', c:'#78ebeb', cyan:'#78ebeb', m:'#dc78eb', purple:'#dc78eb',
+  w:'#ffffff', white:'#ffffff', o:'#ffa032', orange:'#ffa032', pink:'#ff8cc8',
+};
+const BOARD_SIZES = { small:.7, s1:.7, normal:1, s2:1, big:1.7, s3:1.7 };
+const BOARD_POS   = { ue:'上', top:'上', shita:'下', bottom:'下', naka:'', middle:'' };
+function escHtml(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+// Mirror of the host's markup parser (marquee._parse_runs): colour /
+// size / underline / highlight tags become spans, position tags are
+// stripped (shown as a tiny badge), unknown tags stay literal.
+function boardMarkup(text) {
+  const tagRe = /<\/?[a-zA-Z0-9_]+\/?>|<\/>/g;
+  const colors = [null], sizes = [1];
+  let u = false, hl = false, pin = '';
+  let out = '', pos = 0, m;
+  const emit = (piece) => {
+    if (!piece) return;
+    let st = '';
+    if (colors[colors.length-1]) st += 'color:' + colors[colors.length-1] + ';';
+    if (sizes[sizes.length-1] !== 1) st += 'font-size:' + sizes[sizes.length-1] + 'em;';
+    let h = escHtml(piece).replace(/\n/g, '<br>');
+    if (u)  h = '<u>' + h + '</u>';
+    if (hl) h = '<span class="hl">' + h + '</span>';
+    out += st ? '<span style="' + st + '">' + h + '</span>' : h;
+  };
+  while ((m = tagRe.exec(text)) !== null) {
+    emit(text.slice(pos, m.index));
+    pos = m.index + m[0].length;
+    const tag = m[0].toLowerCase().replace(/^<|>$/g, '').trim();
+    if (tag === '/' || tag === '/color') { if (colors.length > 1) colors.pop(); continue; }
+    const close = tag.startsWith('/');
+    const name = close ? tag.slice(1) : tag;
+    if (name in BOARD_POS) { if (!close && !pin) pin = BOARD_POS[name]; continue; }
+    if (name in BOARD_COLORS) { if (close) { if (colors.length > 1) colors.pop(); } else colors.push(BOARD_COLORS[name]); continue; }
+    if (name in BOARD_SIZES)  { if (close) { if (sizes.length > 1) sizes.pop(); }  else sizes.push(BOARD_SIZES[name]);  continue; }
+    if (name === 'u') { u = !close; continue; }
+    if (name === 'hl' || name === 'mark') { hl = !close; continue; }
+    emit(m[0]);
+  }
+  emit(text.slice(pos));
+  if (pin) out += '<span class="pin">' + pin + '固定</span>';
+  return out;
+}
+function boardAtBottom() {
+  return boardList.scrollHeight - boardList.scrollTop - boardList.clientHeight < 40;
+}
+function boardScrollBottom() {
+  boardList.scrollTop = boardList.scrollHeight;
+  boardNew.classList.remove('show');
+}
+function boardRender(e) {
+  const row = document.createElement('div');
+  const kind = ['viewer','ai','info','text'].includes(e.kind) ? e.kind : 'text';
+  row.className = 'bd src-' + (e.src || 'comment') + ' kind-' + kind;
+  if (e.src === 'clear') {
+    row.innerHTML = '<span class="t">' + escHtml(e.t || '') + '</span>' +
+                    '<span class="src">CLEAR</span>' +
+                    '<span class="body">── 画面の文字を消去 ──</span>';
+    return row;
+  }
+  const srcLbl = e.src === 'marquee' ? '📢' : '💬';
+  let body = '';
+  if (e.who) body += '<span class="who">' + escHtml(e.who) + '</span>';
+  body += boardMarkup(e.text || '');
+  row.innerHTML = '<span class="t">' + escHtml(e.t || '') + '</span>' +
+                  '<span class="src" title="' + (e.src === 'marquee' ? '横スクロール' : 'コメントフィード') + '">' + srcLbl + '</span>' +
+                  '<span class="body">' + body + '</span>';
+  return row;
+}
+function boardUpdateCount() {
+  boardCount.textContent = boardTotal ? boardTotal + ' 行' : '';
+}
+async function refreshBoard() {
+  if (boardHidden || document.hidden) return;
+  try {
+    const r = await fetch(api('board?since=' + boardLast), { cache: 'no-store' });
+    if (!r.ok) return;
+    const j = await r.json();
+    if (boardEpoch !== null && j.epoch !== boardEpoch) {
+      // Host restarted — its ids started over; drop what we have.
+      boardList.innerHTML = '';
+      boardLast = 0; boardTotal = 0;
+      boardEpoch = j.epoch;
+      return refreshBoard();
+    }
+    boardEpoch = j.epoch;
+    const items = j.items || [];
+    if (!items.length) { if (j.last < boardLast) boardLast = j.last; return; }
+    const stick = boardFollow.checked && boardAtBottom();
+    const wasEmpty = boardTotal === 0;
+    const frag = document.createDocumentFragment();
+    for (const e of items) { frag.appendChild(boardRender(e)); boardLast = Math.max(boardLast, e.id); }
+    boardList.appendChild(frag);
+    boardTotal += items.length;
+    while (boardList.children.length > BOARD_KEEP) boardList.removeChild(boardList.firstChild);
+    boardUpdateCount();
+    if (stick || wasEmpty) boardScrollBottom();
+    else boardNew.classList.add('show');
+  } catch (e) { /* network blip */ }
+}
+boardList.addEventListener('scroll', () => { if (boardAtBottom()) boardNew.classList.remove('show'); });
+boardNew.onclick = boardScrollBottom;
+document.getElementById('btnBoardBottom').onclick = boardScrollBottom;
+document.getElementById('btnBoardHide').onclick = (ev) => {
+  boardHidden = !boardHidden;
+  boardList.style.display = boardHidden ? 'none' : '';
+  ev.target.textContent = boardHidden ? 'ひらく' : 'たたむ';
+  try { localStorage.setItem('poco_board_hidden', boardHidden ? '1' : '0'); } catch (_) {}
+  if (!boardHidden) refreshBoard();
+};
+try {
+  if (localStorage.getItem('poco_board_hidden') === '1') document.getElementById('btnBoardHide').click();
+} catch (_) {}
+document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshBoard(); });
+
 refreshStatus();
 setInterval(refreshStatus, 2000);
+refreshBoard();
+setInterval(refreshBoard, 1500);
 </script>
 </body>
 </html>
