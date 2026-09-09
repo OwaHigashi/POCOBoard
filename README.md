@@ -510,6 +510,7 @@ control_screen  = -1
 
 # ---- Media playback ----
 image_display_sec  = 180
+image_text_hide_sec = 8       ; 写真・生成画像が出た直後、コメントフィードを完全に消す秒数 (その後 0.6 秒でフェードイン。0 で消さない)
 media_min_play_sec = 60
 
 # ---- Live camera (USB / 仮想カメラ) ----

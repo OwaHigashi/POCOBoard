@@ -139,6 +139,9 @@ def main() -> int:
     # media_min_play_sec: videos and uploaded audio loop until at least N seconds
     #                     have played, then stop at the next natural end (0 = play once).
     image_sec    = cfg.get_int("image_display_sec", 180)
+    # image_text_hide_sec: hide the COMMENT feed completely for N seconds whenever a
+    #                      picture (uploaded / AI-generated) appears, then fade it back.
+    image_text_hide_sec = cfg.get_int("image_text_hide_sec", 8)
     min_play_sec = cfg.get_int("media_min_play_sec", 60)
     # Live camera (USB / virtual camera) — ON by default: the camera feed
     # is the standard idle background, with FX / marquee overlaid
@@ -247,6 +250,7 @@ def main() -> int:
         status_text_cb=lambda: _ready_footer(host, port, bridge),
     )
     display.set_image_display_sec(image_sec)
+    display.set_image_text_hide_sec(max(0, min(120, image_text_hide_sec)))
     display.set_media_min_play_sec(min_play_sec)
     display.set_marquee_scale(max(50, min(500, marquee_size_pct)) / 100.0)
     display.set_piano_scroll_pps(float(piano_pps))

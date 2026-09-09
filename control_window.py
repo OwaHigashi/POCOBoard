@@ -1380,6 +1380,21 @@ class ControlWindow(QWidget):
         self.spImageSec.valueChanged.connect(self._on_image_sec_changed)
         dl.addWidget(self.spImageSec, 3, 1, 1, 2)
 
+        # How long the COMMENT feed stays fully transparent right after a
+        # picture (uploaded / AI-generated) appears, so it can be seen.
+        dl.addWidget(QLabel("画像表示後コメント非表示 (秒):"), 4, 0)
+        self.spImageHideSec = QSpinBox()
+        self.spImageHideSec.setRange(0, 120)
+        self.spImageHideSec.setSuffix(" 秒")
+        self.spImageHideSec.setSpecialValueText("消さない")
+        self.spImageHideSec.setMinimumHeight(30)
+        self.spImageHideSec.setValue(self.display._image_text_hide_sec)
+        self.spImageHideSec.setToolTip(
+            "写真・生成画像が画面に出た直後、コメントフィードを完全に透明にしておく秒数。\n"
+            "その後 0.6 秒かけて元の濃さに戻ります。0 = 消さない。config: image_text_hide_sec")
+        self.spImageHideSec.valueChanged.connect(self._on_image_hide_sec_changed)
+        dl.addWidget(self.spImageHideSec, 4, 1, 1, 2)
+
         # Output horizontal correction for the drawn layers (FX / marquee
         # / piano roll / photos / videos): compose on a narrower virtual
         # canvas and stretch to full width, so the downstream squeeze
@@ -1960,6 +1975,10 @@ class ControlWindow(QWidget):
             self._log_local("ADMIN", "ピアノロール演出 ON (写真/動画/FX は半透明オーバレイ)")
         else:
             self._log_local("ADMIN", "ピアノロール演出 OFF")
+
+    def _on_image_hide_sec_changed(self, v: int) -> None:
+        self.display.set_image_text_hide_sec(int(v))
+        self._log_local("ADMIN", "画像表示後のコメント非表示: " + ("しない" if v == 0 else f"{v}秒"))
 
     def _on_image_sec_changed(self, v: int) -> None:
         self.display.set_image_display_sec(int(v))

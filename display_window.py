@@ -172,6 +172,12 @@ class DisplayWindow(QWidget):
         # this many seconds, then the background is cleared automatically.
         # 0 disables auto-clear (image persists until 停止).
         self._image_display_sec: int = 180
+        # When a picture is installed (uploaded / AI-generated), the COMMENT
+        # feed is hidden completely for image_text_hide_sec seconds so the
+        # picture can be seen, then fades back in over ~0.6 s.
+        self._image_text_hide_sec: int = 8
+        self._text_hide_until: float = 0.0     # time.monotonic() deadline
+        self._text_fade_sec: float = 0.6
         self._image_timer = QTimer(self)
         self._image_timer.setSingleShot(True)
         self._image_timer.timeout.connect(self._on_image_timeout)
@@ -1086,7 +1092,29 @@ class DisplayWindow(QWidget):
         self._image_timer.stop()
         if self._image_display_sec > 0:
             self._image_timer.start(self._image_display_sec * 1000)
+        if self._image_text_hide_sec > 0:
+            self._text_hide_until = time.monotonic() + self._image_text_hide_sec
+        self._dirty = True
         return True
+
+    def set_image_text_hide_sec(self, sec: int) -> None:
+        """Seconds the COMMENT feed stays fully transparent after a picture
+        is shown (0 = never hide).  Changing it does not affect a hide that
+        is already in progress."""
+        self._image_text_hide_sec = max(0, int(sec))
+
+    def _text_hide_factor(self) -> float:
+        """0.0 while the feed is hidden after a picture, ramping to 1.0
+        over _text_fade_sec once the hide period ends."""
+        if self._text_hide_until <= 0.0:
+            return 1.0
+        left = self._text_hide_until - time.monotonic()
+        if left > 0:
+            return 0.0
+        f = min(1.0, -left / max(0.05, self._text_fade_sec))
+        if f >= 1.0:
+            self._text_hide_until = 0.0
+        return f
 
     def _on_image_timeout(self) -> None:
         """Auto-clear handler: drop the image background only.
@@ -1242,6 +1270,8 @@ class DisplayWindow(QWidget):
             if not self._scene.update(dt_ms):
                 self._scene = None
                 self._dirty = True   # paint once more to erase FX remnants
+        if self._text_hide_until > 0.0:
+            self._dirty = True    # keep repainting so the feed comes back on time
         if self._piano_scene is not None:
             try:
                 self._piano_scene.update(dt_ms)
@@ -1496,16 +1526,17 @@ class DisplayWindow(QWidget):
                 self._marquee.draw(p, text_area)
             _vpop()
 
-        # COMMENT feed — same opacity rule as the marquee over a picture.
+        # COMMENT feed — same opacity rule as the marquee over a picture,
+        # and fully hidden for a while right after a picture appears.
         if self._feed.entries:
-            _vpush()
-            if text_over_picture:
-                p.setOpacity(self._camera_marquee_opacity)
+            hide = self._text_hide_factor()
+            if hide > 0.0:
+                _vpush()
+                op = self._camera_marquee_opacity if text_over_picture else 1.0
+                p.setOpacity(op * hide)
                 self._feed.draw(p, text_area)
                 p.setOpacity(1.0)
-            else:
-                self._feed.draw(p, text_area)
-            _vpop()
+                _vpop()
             self._emit_comment_status()
 
     def _draw_video_frame(self, p: QPainter, w: int, h: int) -> None:
