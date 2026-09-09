@@ -199,7 +199,7 @@ class DisplayWindow(QWidget):
         # videos / FX show at full brightness above it, exactly as they
         # do outside piano mode.
         self._piano_compact: bool = False
-        self._piano_compact_frac: float = 0.25
+        self._piano_compact_frac: float = 0.20
         # Opacity of the compact strip when something shows underneath
         # (config piano_compact_opacity_pct) and where it sits
         # ("bottom" / "top", config piano_compact_position).
@@ -1472,25 +1472,39 @@ class DisplayWindow(QWidget):
             p.restore()
             _vpop()
 
+        # Text (marquee + COMMENT feed) never overlaps the compact piano
+        # strip: it is laid out in the remaining band (the top 80 % when
+        # the strip is the bottom 20 %), so the two stay readable.
+        text_area = QRectF(0, 0, w, h)
+        if piano_compact:
+            _, sh = self._piano_scene_size()
+            if self._piano_compact_position == "top":
+                text_area = QRectF(0, sh, w, max(1, h - sh))
+            else:
+                text_area = QRectF(0, 0, w, max(1, h - sh))
+        # "文字の濃さ" applies whenever a picture is underneath: the live
+        # camera, an uploaded / generated image, or a video.
+        text_over_picture = camera_visible or has_image or has_video
+
         if self._marquee.tracks:
             _vpush()
-            if camera_visible:
+            if text_over_picture:
                 p.setOpacity(self._camera_marquee_opacity)
-                self._marquee.draw(p, QRectF(0, 0, w, h))
+                self._marquee.draw(p, text_area)
                 p.setOpacity(1.0)
             else:
-                self._marquee.draw(p, QRectF(0, 0, w, h))
+                self._marquee.draw(p, text_area)
             _vpop()
 
-        # COMMENT feed — same opacity rule as the marquee over the camera.
+        # COMMENT feed — same opacity rule as the marquee over a picture.
         if self._feed.entries:
             _vpush()
-            if camera_visible:
+            if text_over_picture:
                 p.setOpacity(self._camera_marquee_opacity)
-                self._feed.draw(p, QRectF(0, 0, w, h))
+                self._feed.draw(p, text_area)
                 p.setOpacity(1.0)
             else:
-                self._feed.draw(p, QRectF(0, 0, w, h))
+                self._feed.draw(p, text_area)
             _vpop()
             self._emit_comment_status()
 

@@ -1561,7 +1561,8 @@ class ControlWindow(QWidget):
         self.spCamMqOp.setValue(
             int(round(self.display._camera_marquee_opacity * 100)))
         self.spCamMqOp.setToolTip(
-            "カメラ表示中の横スクロール文字（飛ぶ文字）の不透明度")
+            "カメラ映像・写真（生成画像を含む）・動画の上に出る文字の不透明度。\n"
+            "横スクロール文字とコメントフィードの両方に効きます（下に何も無いときは常に 100 %）。")
         self.spCamMqOp.valueChanged.connect(self._on_cam_marquee_opacity_changed)
         op_row.addWidget(self.spCamMqOp)
         op_row.addStretch(1)
@@ -1725,10 +1726,11 @@ class ControlWindow(QWidget):
             "ピアノロールが画面全体の土台になり、写真・動画・エフェクトは\n"
             "その上に半透明で重なります（config の piano_*_opacity_pct）。")
         self.btnPianoCompact.setToolTip(
-            "ピアノロールを画面下部の帯（既定 1/4、config の\n"
+            "ピアノロールを画面下部の帯（既定 20 %、config の\n"
             "piano_compact_height_pct）に縮め、写真・動画・エフェクトは\n"
             "通常どおり明るいまま表示します。帯はその上に「ロールの濃さ」で\n"
-            "半透明に重なります。演奏中の切り替えでもノートは消えません。")
+            "半透明に重なります。コメントフィードと横スクロール文字は帯を避けて\n"
+            "残りの上 80 % に出るので重なりません。演奏中の切り替えでもノートは消えません。")
         gl.addLayout(lay_row, 2, 0, 1, 3)
         self._refresh_piano_layout_ui()
 

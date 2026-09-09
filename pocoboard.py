@@ -176,7 +176,7 @@ def main() -> int:
     # the bottom — piano_compact_height_pct of the screen — while photos
     # / videos / FX show at full brightness above it).
     piano_compact     = cfg.get_bool("piano_compact", False)
-    piano_compact_pct = cfg.get_int("piano_compact_height_pct", 25)
+    piano_compact_pct = cfg.get_int("piano_compact_height_pct", 20)
     piano_compact_op  = cfg.get_int("piano_compact_opacity_pct", 65)
     piano_compact_pos = cfg.get_str("piano_compact_position", "bottom")
     # Keyboard height (% of screen, before the output correction divides

@@ -234,7 +234,7 @@ http://192.168.1.23:8080/
   - 表示は 2 種類をボタンで切り替え:
     - **通常** — ロールが画面全体の土台になり、写真・動画・エフェクトは
       半透明で重なります（config: `piano_image_opacity_pct` 等）。
-    - **コンパクト** — ロールを画面下部の帯（既定 1/4、config:
+    - **コンパクト** — ロールを画面下部の帯（既定 20 %、config:
       `piano_compact_height_pct`）に縮め、写真・動画・エフェクトは
       暗くせず通常どおり表示。帯はその上に「ロールの濃さ」で半透明に
       重なります。演奏中に切り替えてもノートは消えません。起動時の
@@ -534,7 +534,7 @@ piano_roll_opacity_pct = 65   ; カメラ表示中のロール自体の不透明
 piano_image_opacity_pct = 35  ; 通常表示: ロール上の写真の不透明度
 piano_video_opacity_pct = 35  ; 通常表示: ロール上の動画の不透明度
 piano_compact = false         ; true=コンパクト表示（帯・写真は暗くしない）
-piano_compact_height_pct = 25 ; コンパクト帯の高さ (画面の %、10..50)
+piano_compact_height_pct = 20 ; コンパクト帯の高さ (画面の %、10..50)。コメント・横スクロール文字は帯を避けて残りの領域に出る
 piano_compact_opacity_pct = 65 ; コンパクト帯の不透明度（下に写真等があるとき）
 piano_compact_position = bottom ; 帯の位置 bottom / top
 
