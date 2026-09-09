@@ -489,9 +489,11 @@ class PromptDialog(QDialog):
 
     おわくさは POST /ai のたびにヘッダ X-Poco-AI-Url で自分の制御口 (既定 http://<IP>:8765)
     を名乗る。ここはその URL に
-      GET /prompt          取得 (現在のシステムプロンプト / 名前)
-      PUT /prompt {prompt, name}
+      GET /prompt          取得 (現在の人格プロンプト / 名前 / 返答の文字数 / 固定の基本ルール)
+      PUT /prompt {prompt, name, reply_chars, reply_max, answer_chars}
                            設定 (次の返答から効く)。{"reset": true} で起動時の既定に戻す。
+                           人格 (prompt) だけが編集対象。基本ルール (日本語のみ・絵文字・傷つけない・キャラ指定の
+                           受け方) はおわくさ側のコードに固定で、文字数だけ差し込まれる。
                            {"save": true} で owakusa 側のファイルにも書き、再起動後も残す
     を投げる。config.ini の ai_token を設定していれば同じ値を X-Poco-AI-Token で送る。
     HTTP は別スレッドで叩き、結果を Signal で Qt スレッドに戻す (画面は固まらない)。
@@ -544,19 +546,67 @@ class PromptDialog(QDialog):
             "変えると「こんぴーた、画面消して」のように新しい名前で呼べます (おわくさ等の元の名前でも反応)。\n"
             "システムプロンプト側は書き換えなくても、おわくさが読み替えの一文を自動で足します。")
         prow.addWidget(self.edName)
+        prow.addSpacing(16)
+        prow.addWidget(QLabel("返答の文字数:"))
+        self.spChars = QSpinBox()
+        self.spChars.setRange(10, 300)
+        self.spChars.setValue(40)
+        self.spChars.setSuffix(" 文字前後")
+        self.spChars.setMinimumHeight(30)
+        self.spChars.setToolTip(
+            "ふつうの返答 (コメント・入室・お祝い等) の目安の文字数。\n"
+            "おわくさ側の基本ルールの「長さは 1〜2 文・◯◯ 文字前後」に差し込まれます。\n"
+            "「設定」を押すまで反映されません。")
+        prow.addWidget(self.spChars)
+        self.spCharsMax = QSpinBox()
+        self.spCharsMax.setRange(10, 300)
+        self.spCharsMax.setValue(60)
+        self.spCharsMax.setPrefix("上限 ")
+        self.spCharsMax.setSuffix(" 文字")
+        self.spCharsMax.setMinimumHeight(30)
+        self.spCharsMax.setToolTip("ふつうの返答の上限文字数 (「長くても ◯◯ 文字まで」)。目安より小さければ目安に揃えられます。")
+        prow.addWidget(self.spCharsMax)
+        self.spCharsAns = QSpinBox()
+        self.spCharsAns.setRange(10, 300)
+        self.spCharsAns.setValue(80)
+        self.spCharsAns.setPrefix("質問の答え ")
+        self.spCharsAns.setSuffix(" 文字")
+        self.spCharsAns.setMinimumHeight(30)
+        self.spCharsAns.setToolTip("名前で呼ばれた質問への答えの上限文字数 (「2〜3 文・◯◯ 文字まで」)。")
+        prow.addWidget(self.spCharsAns)
         prow.addStretch(1)
         v.addLayout(prow)
 
-        v.addWidget(QLabel("システムプロンプト (人格・口調):"))
+        hrow = QHBoxLayout()
+        hrow.addWidget(QLabel("システムプロンプト (人格・口調):"))
+        hrow.addStretch(1)
+        self.btnCore = QPushButton("基本ルールを表示")
+        self.btnCore.setCheckable(True)
+        self.btnCore.setToolTip(
+            "人格に関係なく常に守らせる基本ルール (日本語のみ・長さ・絵文字・傷つけない・「◯◯になって」の受け方)。\n"
+            "おわくさ側のコードに固定で、人格プロンプトのあとに毎回自動で付きます。ここでは編集できません\n"
+            "(文字数だけ上の欄で変えられます)。")
+        self.btnCore.toggled.connect(self._toggle_core)
+        hrow.addWidget(self.btnCore)
+        v.addLayout(hrow)
         self.editor = QPlainTextEdit()
         self.editor.setPlaceholderText(
-            "「取得」を押すと、いま動いているおわくさのシステムプロンプト (人格部分) がここに入ります。\n"
-            "書き換えて「設定」を押すと次の返答から効きます。返答の長さもこの文章で決まります\n"
-            "(「1 文・20 文字前後、長くても 35 文字」の行を書き換える)。")
+            "「取得」を押すと、いま動いているおわくさのシステムプロンプトの人格部分 (既定は執事) がここに入ります。\n"
+            "書き換えて「設定」を押すと次の返答から効きます。長さ・絵文字・傷つけない等の基本ルールは\n"
+            "おわくさ側で固定なので書かなくてよく、文字数は上の数値欄で変えます。")
         f = QFont("Segoe UI", 11)
         self.editor.setFont(f)
         self.editor.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
         v.addWidget(self.editor, stretch=1)
+
+        self.coreView = QPlainTextEdit()
+        self.coreView.setReadOnly(True)
+        self.coreView.setFont(QFont("Segoe UI", 10))
+        self.coreView.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
+        self.coreView.setPlaceholderText("「取得」すると、おわくさ側で固定の基本ルール (文字数を差し込んだ状態) がここに出ます。")
+        self.coreView.setMaximumHeight(200)
+        self.coreView.setVisible(False)
+        v.addWidget(self.coreView)
 
         self.lblInfo = QLabel("")
         self.lblInfo.setProperty("class", "small")
@@ -573,13 +623,14 @@ class PromptDialog(QDialog):
         row2.addWidget(self.btnGet)
         self.btnSet = QPushButton("設定")
         self.btnSet.setProperty("class", "send")
-        self.btnSet.setToolTip("編集後のシステムプロンプトをおわくさに送ります (PUT /prompt)。次の返答から効きます。")
+        self.btnSet.setToolTip("編集後の人格プロンプト・名前・返答の文字数をおわくさに送ります (PUT /prompt)。次の返答から効きます。\n"
+                               "文字数の欄もこのボタンを押すまで反映されません。")
         self.btnSet.setMinimumHeight(34)
         self.btnSet.setMinimumWidth(96)
         self.btnSet.clicked.connect(self.apply)
         row2.addWidget(self.btnSet)
         self.btnReset = QPushButton("既定に戻す")
-        self.btnReset.setToolTip("内蔵既定のシステムプロンプトと、起動時の名前 (owakusa.ini) に戻します。")
+        self.btnReset.setToolTip("内蔵既定の人格プロンプト (執事) と、起動時の名前・返答の文字数 (owakusa.ini) に戻します。")
         self.btnReset.setMinimumHeight(34)
         self.btnReset.clicked.connect(self.reset)
         row2.addWidget(self.btnReset)
@@ -587,7 +638,7 @@ class PromptDialog(QDialog):
         self.chkSave = QCheckBox("おわくさ側にファイル保存 (再起動後も有効)")
         self.chkSave.setToolTip(
             "ON にして「設定」すると owakusa 側のファイル (system_prompt.txt / owakusa_overrides.json) にも書き、\n"
-            "owakusa.py を起動し直しても同じプロンプト・名前で始まります。\n"
+            "owakusa.py を起動し直しても同じプロンプト・名前・文字数で始まります。\n"
             "「既定に戻す」+ ON でそのファイルを消します。OFF なら今回の起動中だけ有効。")
         row2.addWidget(self.chkSave)
         row2.addStretch(1)
@@ -603,7 +654,8 @@ class PromptDialog(QDialog):
         v.addWidget(self.lblStatus)
 
         note = QLabel(
-            "ここで編集するのは人格・口調の部分だけです。画面操作の JSON 命令の説明 (COMMAND_PROMPT) は "
+            "ここで編集するのは人格・口調の部分だけです。基本ルール (日本語のみ・長さ・絵文字・傷つけない・"
+            "「◯◯になって」でキャラを演じる) と画面操作の JSON 命令の説明 (COMMAND_PROMPT) は "
             "おわくさが自動で後ろに付け足すので書く必要はありません。"
             "端末からも  owakusa.py --prompt / --prompt-set FILE / --prompt-reset  で同じことができます。")
         note.setProperty("class", "small")
@@ -631,6 +683,10 @@ class PromptDialog(QDialog):
         self.lblStatus.setText(text)
         self.lblStatus.setStyleSheet("color:#b03a2e;" if error else "color:#3d7a4a;")
 
+    def _toggle_core(self, on: bool) -> None:
+        self.coreView.setVisible(on)
+        self.btnCore.setText("基本ルールを隠す" if on else "基本ルールを表示")
+
     def _set_busy(self, busy: bool) -> None:
         self._busy = busy
         for b in (self.btnGet, self.btnSet, self.btnReset):
@@ -654,6 +710,9 @@ class PromptDialog(QDialog):
             return
         payload = {"prompt": text,
                    "name": self.edName.text().strip() or None,
+                   "reply_chars": int(self.spChars.value()),
+                   "reply_max": int(self.spCharsMax.value()),
+                   "answer_chars": int(self.spCharsAns.value()),
                    "save": self.chkSave.isChecked()}
         self._request("set", "PUT", "/prompt", payload)
 
@@ -710,18 +769,28 @@ class PromptDialog(QDialog):
         self.editor.setPlainText(prompt)
         self._loaded_prompt = prompt
         self.edName.setText(str(res.get("name", "")))
+        for sp, key in ((self.spChars, "reply_chars"), (self.spCharsMax, "reply_max"), (self.spCharsAns, "answer_chars")):
+            try:
+                sp.setValue(int(res.get(key, sp.value())))
+            except (TypeError, ValueError):
+                pass
+        self.coreView.setPlainText(str(res.get("core_rules", "")))
         self.lblInfo.setText(
-            f"{res.get('name', 'おわくさ')} / モデル {res.get('model', '?')} / いまのプロンプト: {src} / "
-            f"{len(prompt)} 文字" + (f" / 口調指定中: {res['style']}" if res.get("style") else ""))
+            f"{res.get('name', 'おわくさ')} / モデル {res.get('model', '?')} / いまの人格プロンプト: {src} / "
+            f"{len(prompt)} 文字 / 返答 {res.get('reply_chars', '?')} 文字前後 (上限 {res.get('reply_max', '?')}) / "
+            f"質問の答え {res.get('answer_chars', '?')} 文字"
+            + (f" / キャラ指定中: {res['style']}" if res.get("style") else ""))
         if op == "get":
             self._set_status("✔ 取得しました。書き換えて「設定」で反映します。")
             self._log("AI/PROMPT", f"GET  {len(prompt)} 文字 ({res.get('source')})")
         elif op == "set":
             saved = res.get("saved")
             self._set_status("✔ 設定しました。次の返答から効きます。" + (f"  保存: {saved}" if saved else "  (今回の起動中のみ)"))
-            self._log("AI/PROMPT", f"SET  {len(prompt)} 文字 name={res.get('name')}{'  saved=' + str(saved) if saved else ''}")
+            self._log("AI/PROMPT", f"SET  {len(prompt)} 文字 name={res.get('name')} "
+                                   f"chars={res.get('reply_chars')}/{res.get('reply_max')}/{res.get('answer_chars')}"
+                                   f"{'  saved=' + str(saved) if saved else ''}")
         else:
-            self._set_status("✔ 起動時の既定 (プロンプト・名前) に戻しました。"
+            self._set_status("✔ 起動時の既定 (人格プロンプト・名前・文字数) に戻しました。"
                              + ("  保存ファイルも消しました。" if "removed" in str(res.get("saved") or "") else ""))
             self._log("AI/PROMPT", "RESET")
 
