@@ -20,6 +20,14 @@ Endpoints:
                          the control window's システムプロンプト編集 dialog
                          talks to that URL (GET/PUT /prompt).
   GET  /ai/status        JSON: text mode, feed count, sizes, ai_url
+  GET  /gallery?since=N  JSON: pictures shown in THIS session (uploaded
+                         photos + AI-generated images), newest last —
+                         {epoch, last, items:[{id, t, name, orig, size,
+                         who}]}.  Starts empty on every process start;
+                         the files themselves stay on disk.
+  GET  /media/<name>     the picture file itself (only names listed by
+                         /gallery in this session); ?dl=1 forces a
+                         download (Content-Disposition: attachment)
   GET  /board?since=N    JSON: everything the text board has shown (AI
                          comments / replies, viewer marquees, operator
                          lines) newer than entry id N — a scroll-back
@@ -144,6 +152,12 @@ class WebBridge(QObject):
         self._board: deque = deque(maxlen=500)
         self._board_seq = 0
         self._board_epoch = int(time.time())
+        # Pictures shown in this session (GET /gallery, files via
+        # /media/<name>).  In-memory only, so a fresh process starts with an
+        # empty list even though the files stay in cache/uploads.
+        self._gallery: list[dict] = []
+        self._gallery_by_name: dict[str, dict] = {}
+        self._gallery_seq = 0
         # Known clients — client_id -> {name, last_seen_ms, ip, blocked}
         self._clients: dict[str, dict] = {}
         # IPs blocked outright (operator action).  Checked alongside the
@@ -318,6 +332,35 @@ class WebBridge(QObject):
                 "mode":  self._text_mode,
                 "items": items,
             }
+
+    # ---- session picture gallery (GET /gallery, /media/<name>) ----
+    def record_media(self, kind: str, path: str, orig: str, size: int,
+                     who: str, cid: str) -> None:
+        name = os.path.basename(path)
+        with self._lock:
+            self._gallery_seq += 1
+            e = {"id": self._gallery_seq, "t": time.strftime("%H:%M:%S"),
+                 "kind": kind, "name": name, "orig": orig, "size": int(size),
+                 "who": who or "", "cid": cid or "", "path": path}
+            self._gallery.append(e)
+            self._gallery_by_name[name] = e
+            if len(self._gallery) > 2000:
+                old = self._gallery.pop(0)
+                self._gallery_by_name.pop(old["name"], None)
+
+    def gallery_since(self, since: int, limit: int = 500) -> dict:
+        with self._lock:
+            items = [{k: v for k, v in e.items() if k not in ("path", "cid")}
+                     for e in self._gallery if e["id"] > since]
+            if len(items) > limit:
+                items = items[-limit:]
+            return {"epoch": self._board_epoch, "last": self._gallery_seq,
+                    "items": items}
+
+    def gallery_lookup(self, name: str) -> Optional[dict]:
+        with self._lock:
+            e = self._gallery_by_name.get(name)
+            return dict(e) if e else None
 
     def is_piano_mode(self) -> bool:
         with self._lock:
@@ -701,6 +744,20 @@ class _Handler(BaseHTTPRequestHandler):
             snap["ok"] = True
             self._send_json(200, snap)
             return
+        if u.path == "/gallery":
+            q = parse_qs(u.query or "")
+            try:
+                since = max(0, int(q.get("since", ["0"])[0]))
+            except (TypeError, ValueError):
+                since = 0
+            out = self.bridge.gallery_since(since)
+            out["ok"] = True
+            self._send_json(200, out)
+            return
+        if u.path.startswith("/media/"):
+            self._serve_media(unquote(u.path[len("/media/"):]),
+                              parse_qs(u.query or ""))
+            return
         if u.path == "/board":
             # Read-only scroll-back of the text board.  Not gated by the
             # ACCEPT switch or client blocks — it only mirrors what is
@@ -1080,20 +1137,67 @@ class _Handler(BaseHTTPRequestHandler):
                 self._send_json(413, {"ok": False, "reason": "too_large_or_empty"},
                                 set_cookie=new_cookie)
                 return
+            if kind == "image":
+                # Keep the sender's own file name (Japanese and all) for the
+                # gallery / download; the on-disk name stays ASCII-only.
+                orig = os.path.basename(raw_name.replace("\\", "/")).strip()[:120] or safe_name
+                self.bridge.record_media(kind, dest, orig, written, label, cid)
             self.bridge.mediaUploaded.emit(cid, label, ip, kind, dest)
             self.bridge.emit_log(
                 "UPLOAD",
                 f"{now_hms}  {label:24s}  UPLOAD    {kind:<5s} {written//1024} KB  {safe_name}",
             )
             self._send_json(200, {"ok": True, "size": written}, set_cookie=new_cookie)
-            self._prune_old_uploads()
+            self._prune_old_uploads(self.prune_max)
             return
 
         self._send_json(404, {"ok": False, "reason": "not_found"})
 
-    # Keep at most ~50 files in the upload cache so long sessions don't
-    # quietly fill the disk.
-    def _prune_old_uploads(self, max_files: int = 50) -> None:
+    _MEDIA_TYPES = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
+                    ".webp": "image/webp", ".gif": "image/gif", ".bmp": "image/bmp",
+                    ".mp4": "video/mp4", ".webm": "video/webm", ".mov": "video/quicktime",
+                    ".m4v": "video/x-m4v", ".mkv": "video/x-matroska"}
+
+    def _serve_media(self, name: str, query: dict) -> None:
+        """Send one picture from this session's gallery.  Only names the
+        bridge registered this session are served, so the cache directory
+        is never browsable and old sessions' files stay private."""
+        if not name or "/" in name or "\\" in name or name.startswith("."):
+            self._send_json(404, {"ok": False, "reason": "not_found"})
+            return
+        e = self.bridge.gallery_lookup(name)
+        if e is None or not os.path.isfile(e["path"]):
+            self._send_json(404, {"ok": False, "reason": "not_found"})
+            return
+        ext = os.path.splitext(name)[1].lower()
+        ctype = self._MEDIA_TYPES.get(ext, "application/octet-stream")
+        size = os.path.getsize(e["path"])
+        self.send_response(200)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(size))
+        self.send_header("Cache-Control", "private, max-age=86400")
+        if query.get("dl", ["0"])[0] not in ("", "0"):
+            fn = quote(e.get("orig") or name)
+            self.send_header("Content-Disposition",
+                             f"attachment; filename*=UTF-8''{fn}")
+        self.end_headers()
+        try:
+            with open(e["path"], "rb") as f:
+                while True:
+                    chunk = f.read(256 * 1024)
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+        except (OSError, ConnectionError):
+            pass
+
+    # Old cache pruning.  Off by default (prune_max = 0, config
+    # upload_prune_max): generated / uploaded pictures are kept so they can
+    # be downloaded later.  With a positive limit only non-image files are
+    # pruned — pictures always stay.
+    def _prune_old_uploads(self, max_files: int = 0) -> None:
+        if max_files <= 0:
+            return
         protected = set()
         try:
             if callable(self.active_paths_cb):
@@ -1110,7 +1214,9 @@ class _Handler(BaseHTTPRequestHandler):
             ]
         except OSError:
             return
-        prunable = [entry for entry in entries if entry[1] not in protected]
+        prunable = [entry for entry in entries
+                    if entry[1] not in protected
+                    and os.path.splitext(entry[2])[1].lower() not in _SAFE_EXT["image"]]
         if len(prunable) <= max_files:
             return
         prunable.sort()   # oldest first
@@ -1144,9 +1250,11 @@ def _ai_preview(c: dict) -> str:
 
 
 def build_server(host: str, port: int, bridge: WebBridge,
-                 upload_dir: str, active_paths_cb=None) -> ThreadingHTTPServer:
+                 upload_dir: str, active_paths_cb=None,
+                 prune_max: int = 0) -> ThreadingHTTPServer:
     handler_cls = type("_BoundHandler", (_Handler,),
                        {"bridge": bridge, "upload_dir": upload_dir,
+                        "prune_max": int(prune_max),
                         "active_paths_cb": staticmethod(active_paths_cb) if active_paths_cb else None})
     server_cls = type(
         "_PocoThreadingHTTPServer",
@@ -1157,8 +1265,10 @@ def build_server(host: str, port: int, bridge: WebBridge,
 
 
 def run_in_thread(host: str, port: int, bridge: WebBridge,
-                  upload_dir: str, active_paths_cb=None) -> tuple[ThreadingHTTPServer, threading.Thread]:
-    srv = build_server(host, port, bridge, upload_dir, active_paths_cb=active_paths_cb)
+                  upload_dir: str, active_paths_cb=None,
+                  prune_max: int = 0) -> tuple[ThreadingHTTPServer, threading.Thread]:
+    srv = build_server(host, port, bridge, upload_dir, active_paths_cb=active_paths_cb,
+                       prune_max=prune_max)
     th = threading.Thread(target=srv.serve_forever, name="pocoboard-http", daemon=True)
     th.start()
     return srv, th

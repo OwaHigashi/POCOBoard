@@ -126,6 +126,11 @@ def main() -> int:
     # How many text-board lines the browser UI can scroll back through
     # (GET /board).  Kept in RAM only; the buffer resets on restart.
     text_log_max       = cfg.get_int("text_log_max", 500)
+    # Old-file pruning of cache/uploads.  0 (default) = never delete:
+    # uploaded photos and AI-generated pictures stay on disk so the browser
+    # UI can hand out download links.  >0 prunes non-image files beyond
+    # that count (pictures are never pruned).
+    upload_prune_max   = cfg.get_int("upload_prune_max", 0)
     # Shared secret for POST /ai (empty = any LAN client may drive the AI
     # screen buffer).  The おわくさ script sends it as X-Poco-AI-Token.
     ai_token           = cfg.get_str("ai_token", "")
@@ -393,7 +398,8 @@ def main() -> int:
     os.makedirs(upload_dir, exist_ok=True)
     try:
         srv, srv_thread = run_in_thread(
-            host, port, bridge, upload_dir, active_paths_cb=media_queue.protected_paths)
+            host, port, bridge, upload_dir, active_paths_cb=media_queue.protected_paths,
+            prune_max=max(0, upload_prune_max))
     except OSError as exc:
         QMessageBox.critical(
             None, "POCOBoard — HTTP server failed",

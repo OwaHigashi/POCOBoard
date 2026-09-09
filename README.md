@@ -308,6 +308,11 @@ http://192.168.1.23:8080/
   - 新着は自動で最下部に追従（`自動で追う`）。上に遡っている間は追従せず `▼ 新着があります` の
     ボタンだけ出るので、読んでいる途中で飛ばされません。`たたむ` で折りたためます。
   - 遡れる行数は `config.ini` の `text_log_max`（既定 500）。メモリ上のみで、再起動で消えます。
+- 画像一覧
+  - このセッション（POCOBoard 起動後）に画面へ出た写真・おわくさの生成画像がサムネイルで並びます（新しいものが先頭）。
+    「開く」で原寸表示、「保存」でダウンロードできます。
+  - 一覧は POCOBoard を起動するたびに空から始まります。ファイル自体は `cache/uploads` に残り続けます
+    （既定では削除しません。`upload_prune_max` 参照）。
 
 ### TALK について
 
@@ -414,6 +419,8 @@ http://<IP>:<port>/
 | POST | `/marquee/stop` | - | 横スクロール停止 |
 | POST | `/ai` | JSON（下記） | おわくさ AI の画面操作。`X-Poco-AI-Token` ヘッダ（`ai_token` 設定時） |
 | GET | `/ai/status` | - | `{mode, comment:{count,size_pct}, marquee:{used,size_pct}, last_ai_ms, ai_url}` |
+| GET | `/gallery?since=N` | - | このセッションに画面へ出た画像の一覧 `{epoch, last, items:[{id, t, name, orig, size, who}]}`。起動ごとに空から |
+| GET | `/media/<name>` | `?dl=1` で保存 | `/gallery` に載っている画像ファイル本体（それ以外の名前は 404）。`dl=1` で `Content-Disposition: attachment`（元のファイル名） |
 | GET | `/board?since=N&limit=500` | - | 画面の文字ログ。id が `N` より新しい行を返す `{epoch, last, mode, items:[{id, t, src, who, text, kind}]}`。`src` = `comment` / `marquee` / `clear`、`text` は装飾タグ付きの原文。`epoch` は起動ごとに変わる（再起動検知用） |
 | POST | `/name` | `{"name":"Alice"}` | 表示名保存 |
 | POST | `/upload?type=image|video|audio&filename=...` | raw binary | メディアアップロード |
@@ -567,6 +574,7 @@ comment_scroll_ms = 350    ; 新着時に上へ滑るアニメの時間
 comment_show_time = false  ; 行頭に時刻 (HH:MM) を付ける
 comment_spacing_pct = 40   ; 行間の詰め具合 (0..200)。100 = 旧来のゆったり、40 で約 2.5 倍詰まる
 text_log_max = 500         ; ブラウザ UI「画面の文字ログ」(GET /board) が遡れる行数 (10..5000)。メモリ上のみ
+upload_prune_max = 0       ; cache/uploads の古いファイル削除。0 = 消さない (既定)。N>0 で画像以外を N 件まで (画像は常に残す)
 ;ai_token =                ; POST /ai の共有トークン。空なら LAN 内の誰でも AI 操作可
 ;ai_url =                  ; おわくさの制御口 (GET/PUT /prompt)。通常は空: POST /ai のヘッダ X-Poco-AI-Url で毎回名乗る
 ```
@@ -599,7 +607,7 @@ build.bat
 | 動画が再生できない | 対応 codec を確認。H.264 MP4 を推奨 |
 | 音が出ない | Windows の再生デバイスとアプリ音量を確認 |
 | Display が別モニタに出ない | 表示タブまたは `display_screen` を確認 |
-| 長時間運用でキャッシュが増える | `cache/uploads` は自動 prune されるが、再生中・キュー中ファイルは保護される |
+| 長時間運用でキャッシュが増える | 既定 (`upload_prune_max = 0`) では削除しない (画像をあとからダウンロードできるよう残す)。`upload_prune_max = N` で画像以外を N 件まで自動 prune (再生中・キュー中は保護) |
 | リバースプロキシ越しに大きい動画がアップロードできない | プロキシのリクエストバッファリングを無効化（例: Nginx の `proxy_request_buffering off;`）するか、`client_max_body_size` を引き上げる |
 
 ---

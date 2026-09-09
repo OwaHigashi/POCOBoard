@@ -212,7 +212,8 @@ INDEX_HTML = r"""<!doctype html>
   .marquee-box,
   .upload-box,
   .mine-box,
-  .board-box {
+  .board-box,
+  .gallery-box {
     grid-column: 1 / -1;
     display: grid;
     gap: 8px;
@@ -228,7 +229,8 @@ INDEX_HTML = r"""<!doctype html>
   .marquee-box::before,
   .upload-box::before,
   .mine-box::before,
-  .board-box::before {
+  .board-box::before,
+  .gallery-box::before {
     content: "";
     position: absolute;
     inset: 0 0 auto 0;
@@ -340,6 +342,65 @@ INDEX_HTML = r"""<!doctype html>
     padding: 0 4px;
     vertical-align: middle;
   }
+  /* ---- 画像一覧 (this session's uploaded / generated pictures) ---- */
+  #galleryGrid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    gap: 10px;
+    max-height: 60vh;
+    overflow-y: auto;
+    padding: 4px 2px;
+  }
+  #galleryGrid:empty::before {
+    content: "このセッションではまだ画像が出ていません";
+    color: var(--muted);
+    font-size: 13px;
+    grid-column: 1 / -1;
+  }
+  .gi {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    background: #fffdfa;
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 6px;
+    animation: bd-in .25s ease both;
+  }
+  .gi a.thumb {
+    display: block;
+    aspect-ratio: 16 / 10;
+    border-radius: 10px;
+    overflow: hidden;
+    background: #1d1a17;
+  }
+  .gi img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    display: block;
+  }
+  .gi .meta {
+    font-size: 11px;
+    color: var(--muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .gi .meta b { color: var(--text); font-weight: 600; }
+  .gi .acts { display: flex; gap: 6px; }
+  .gi .acts a {
+    flex: 1;
+    text-align: center;
+    font-size: 12px;
+    padding: 6px 4px;
+    border-radius: 9px;
+    border: 1px solid var(--line-strong);
+    background: #f8f3ec;
+    color: var(--text);
+    text-decoration: none;
+  }
+  .gi .acts a.dl { background: #edf4f1; border-color: #bfd0c8; font-weight: 600; }
   .board-new {
     position: sticky;
     bottom: 6px;
@@ -558,7 +619,8 @@ INDEX_HTML = r"""<!doctype html>
       white-space: normal;
       padding: 4px;
     }
-    .marquee-box, .upload-box, .mine-box, .board-box { padding: 14px; border-radius: 18px; }
+    .marquee-box, .upload-box, .mine-box, .board-box, .gallery-box { padding: 14px; border-radius: 18px; }
+    #galleryGrid { grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); }
     #boardList { height: 240px; font-size: 14px; }
     .bd { grid-template-columns: auto 1fr; }
     .bd .src { display: none; }
@@ -705,6 +767,19 @@ INDEX_HTML = r"""<!doctype html>
     <div class="board-new" id="boardNew">▼ 新着があります</div>
     <div style="font-size:12px; opacity:.75;">
       ※ 画面に出たコメント・返答・横スクロール文字がそのまま残ります。流れて読めなくてもここで遡れます。
+    </div>
+  </div>
+
+  <div class="gallery-box" id="galleryBox">
+    <div class="board-head">
+      <strong>🖼️ 画像一覧</strong>
+      <span id="galleryCount"></span>
+      <span class="spacer"></span>
+      <button id="btnGalleryHide">たたむ</button>
+    </div>
+    <div id="galleryGrid"></div>
+    <div style="font-size:12px; opacity:.75;">
+      ※ このセッション (POCOBoard 起動後) に画面へ出た写真・生成画像。新しいものが先頭。「保存」でダウンロードできます。
     </div>
   </div>
 </main>
@@ -1384,10 +1459,68 @@ try {
 } catch (_) {}
 document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshBoard(); });
 
+// ============ 画像一覧 (GET /gallery) ============
+// Pictures shown this session (uploaded photos + AI-generated images).
+// The host keeps the list in memory with monotonic ids; we poll for new
+// ones and prepend them (newest first).  Files are served from
+// /media/<name>; ?dl=1 makes the browser save instead of open.
+const galleryGrid  = document.getElementById('galleryGrid');
+const galleryCount = document.getElementById('galleryCount');
+let galleryLast = 0, galleryEpoch = null, galleryTotal = 0, galleryHidden = false;
+function fmtKB(n) { return n >= 1024 * 1024 ? (n / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' KB'; }
+function galleryRender(e) {
+  const card = document.createElement('div');
+  card.className = 'gi';
+  const src = api('media/' + encodeURIComponent(e.name));
+  const dl  = src + '?dl=1';
+  card.innerHTML =
+    '<a class="thumb" href="' + src + '" target="_blank" rel="noopener"><img loading="lazy" alt=""></a>' +
+    '<div class="meta" title="' + escHtml(e.orig || e.name) + '"><b>' + escHtml(e.t || '') + '</b> ' + escHtml(e.who || '') + '</div>' +
+    '<div class="meta">' + escHtml(e.orig || e.name) + ' · ' + fmtKB(e.size || 0) + '</div>' +
+    '<div class="acts"><a href="' + src + '" target="_blank" rel="noopener">開く</a>' +
+    '<a class="dl" href="' + dl + '" download="' + escHtml(e.orig || e.name) + '">⬇ 保存</a></div>';
+  card.querySelector('img').src = src;
+  return card;
+}
+async function refreshGallery() {
+  if (galleryHidden || document.hidden) return;
+  try {
+    const r = await fetch(api('gallery?since=' + galleryLast), { cache: 'no-store' });
+    if (!r.ok) return;
+    const j = await r.json();
+    if (galleryEpoch !== null && j.epoch !== galleryEpoch) {
+      galleryGrid.innerHTML = ''; galleryLast = 0; galleryTotal = 0; galleryEpoch = j.epoch;
+      return refreshGallery();
+    }
+    galleryEpoch = j.epoch;
+    const items = j.items || [];
+    if (!items.length) { if (j.last < galleryLast) galleryLast = j.last; return; }
+    for (const e of items) {           // oldest→newest from the server; newest ends up on top
+      galleryGrid.insertBefore(galleryRender(e), galleryGrid.firstChild);
+      galleryLast = Math.max(galleryLast, e.id);
+    }
+    galleryTotal += items.length;
+    galleryCount.textContent = galleryTotal + ' 枚';
+  } catch (e) { /* network blip */ }
+}
+document.getElementById('btnGalleryHide').onclick = (ev) => {
+  galleryHidden = !galleryHidden;
+  galleryGrid.style.display = galleryHidden ? 'none' : '';
+  ev.target.textContent = galleryHidden ? 'ひらく' : 'たたむ';
+  try { localStorage.setItem('poco_gallery_hidden', galleryHidden ? '1' : '0'); } catch (_) {}
+  if (!galleryHidden) refreshGallery();
+};
+try {
+  if (localStorage.getItem('poco_gallery_hidden') === '1') document.getElementById('btnGalleryHide').click();
+} catch (_) {}
+document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshGallery(); });
+
 refreshStatus();
 setInterval(refreshStatus, 2000);
 refreshBoard();
 setInterval(refreshBoard, 1500);
+refreshGallery();
+setInterval(refreshGallery, 3000);
 </script>
 </body>
 </html>

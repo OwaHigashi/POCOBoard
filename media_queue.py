@@ -43,6 +43,18 @@ class QueueItem:
     cid:       str = ""   # uploader client_id (for per-user stop/cancel)
 
 
+def _remove_unless_picture(it: "QueueItem") -> None:
+    """Cancelled / cleared queue items lose their file — except pictures,
+    which stay on disk so the browser UI can still hand out their download
+    link (GET /gallery, /media/<name>)."""
+    if it.kind == "image":
+        return
+    try:
+        os.remove(it.path)
+    except OSError:
+        pass
+
+
 class MediaQueue(QObject):
     """Per-process media waiting list + current-playing registry.
 
@@ -105,10 +117,7 @@ class MediaQueue(QObject):
             if dropped:
                 self._items = kept
         for it in dropped:
-            try:
-                os.remove(it.path)
-            except OSError:
-                pass
+            _remove_unless_picture(it)
         if dropped:
             self.changed.emit()
         return dropped
@@ -153,10 +162,7 @@ class MediaQueue(QObject):
                     break
         if found is None:
             return None
-        try:
-            os.remove(found.path)
-        except OSError:
-            pass
+        _remove_unless_picture(found)
         self.changed.emit()
         return found
 
@@ -179,10 +185,7 @@ class MediaQueue(QObject):
             dropped = list(self._items)
             self._items.clear()
         for it in dropped:
-            try:
-                os.remove(it.path)
-            except OSError:
-                pass
+            _remove_unless_picture(it)
         self.changed.emit()
         return len(dropped)
 
