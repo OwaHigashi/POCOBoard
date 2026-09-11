@@ -342,6 +342,17 @@ INDEX_HTML = r"""<!doctype html>
     padding: 0 4px;
     vertical-align: middle;
   }
+  .ext-hint {
+    font-size: 13px;
+    line-height: 1.5;
+    padding: 8px 10px;
+    border-radius: 10px;
+    background: #fff4e0;
+    border: 1px solid #f0d9a8;
+    color: var(--text);
+    word-break: break-all;
+  }
+  .ext-hint code { font-size: 12px; user-select: all; -webkit-user-select: all; }
   /* ---- 画像一覧 (this session's uploaded / generated pictures) ---- */
   #galleryGrid {
     display: grid;
@@ -797,12 +808,14 @@ INDEX_HTML = r"""<!doctype html>
       <strong>🖼️ 画像・動画一覧</strong>
       <span id="galleryCount"></span>
       <span class="spacer"></span>
+      <button id="btnExtBrowser" hidden title="アプリ内ブラウザでは保存できないことがあります">↗ Safari / Chrome で開く</button>
       <button id="btnGalleryHide">たたむ</button>
     </div>
+    <div id="extHint" class="ext-hint" hidden></div>
     <div id="galleryGrid"></div>
     <div style="font-size:12px; opacity:.75;">
       ※ このセッション (POCOBoard 起動後) に画面へ出た写真・動画・生成画像・生成動画。新しいものが先頭。「保存」でダウンロードできます。
-      動画のサムネイルは画面で再生されたときに付きます。Pococha のアプリ内ブラウザで保存できないときは、右上メニューから Safari / Chrome で開いてください。
+      動画のサムネイルは画面で再生されたときに付きます。Pococha のアプリ内ブラウザでは保存できないので、上の「Safari / Chrome で開く」で外部ブラウザに切り替えてから保存してください。
     </div>
   </div>
 </main>
@@ -1490,6 +1503,52 @@ try {
   if (localStorage.getItem('poco_board_hidden') === '1') document.getElementById('btnBoardHide').click();
 } catch (_) {}
 document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshBoard(); });
+
+// ============ 外部ブラウザで開く (Pococha 等のアプリ内ブラウザ対策) ============
+// In-app browsers (WKWebView / Android WebView) cannot download, and a page
+// cannot force another app open.  We can only *try*: iOS honours the
+// x-safari-https:// / x-safari-http:// scheme in many host apps (iOS 17+),
+// Android WebViews sometimes hand intent:// URLs to Chrome.  If the page is
+// still visible shortly after, the attempt failed: copy the URL and tell the
+// viewer to use the host app's own "open in browser" menu.
+const UA = navigator.userAgent || '';
+const EXT_IOS = /iPhone|iPad|iPod/i.test(UA) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+const EXT_ANDROID = /Android/i.test(UA);
+const btnExt = document.getElementById('btnExtBrowser');
+const extHint = document.getElementById('extHint');
+if (EXT_IOS || EXT_ANDROID) btnExt.hidden = false;
+function copyText(t) {
+  try {
+    if (navigator.clipboard && window.isSecureContext) { navigator.clipboard.writeText(t); return true; }
+  } catch (_) {}
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = t; ta.setAttribute('readonly', ''); ta.style.position = 'fixed'; ta.style.top = '-1000px';
+    document.body.appendChild(ta); ta.select(); ta.setSelectionRange(0, t.length);
+    const ok = document.execCommand('copy'); ta.remove(); return ok;
+  } catch (_) { return false; }
+}
+btnExt.onclick = () => {
+  const url = location.href.split('#')[0];
+  let target = '';
+  if (EXT_IOS) {
+    target = 'x-safari-' + url;                          // x-safari-http(s)://host/...
+  } else if (EXT_ANDROID) {
+    const m = url.match(/^(https?):\/\/(.*)$/);
+    if (m) target = 'intent://' + m[2] + '#Intent;scheme=' + m[1] + ';package=com.android.chrome;S.browser_fallback_url=' + encodeURIComponent(url) + ';end';
+  }
+  extHint.hidden = false;
+  extHint.textContent = (EXT_IOS ? 'Safari' : 'Chrome') + ' を開いています…';
+  if (target) { try { location.href = target; } catch (_) {} }
+  setTimeout(() => {
+    if (document.hidden) { extHint.hidden = true; return; }   // switched to the other browser: done
+    const copied = copyText(url);
+    extHint.innerHTML =
+      '自動では開けませんでした' + (copied ? '（URL をコピーしました）' : '') + '。' +
+      (EXT_IOS ? '右上の「…」や共有ボタンから「<b>Safari で開く</b>」を選ぶか、' : '右上の「⋮」メニューから「<b>ブラウザで開く</b>」を選ぶか、') +
+      'Safari / Chrome を開いてこの URL を貼り付けてください:<br><code>' + escHtml(url) + '</code>';
+  }, 1500);
+};
 
 // ============ 画像・動画一覧 (GET /gallery) ============
 // Pictures and videos shown this session (uploaded photos / videos +
