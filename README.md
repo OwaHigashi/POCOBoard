@@ -507,7 +507,7 @@ http_port       = 8080
 
 # ---- Audio / behaviour ----
 startup_volume  = 80          ; 両グループ共通のフォールバック
-startup_fx_volume  = 30       ; 効果音 (BOMB/CHEER 等) の起動時音量（既定 30）
+startup_fx_volume  = 2        ; 効果音 (BOMB/CHEER 等) の起動時音量（既定 2）
 ;startup_ext_volume = 90      ; 外部音声 (TALK・音声・動画) の起動時音量
 fx_volume_bomb_pct   = 50     ; 効果ごとの音量倍率 (% of スライダ)。cheer/hearts/stars/snow/
 fx_volume_cheer_pct  = 100    ;   petals/aurora/laser/sunset/leaves/notes/rainbow も同様に fx_volume_<name>_pct

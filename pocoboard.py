@@ -77,7 +77,7 @@ def main() -> int:
     # Per-group volumes: FX one-shots vs external audio (TALK / uploaded
     # audio / video sound).  FX defaults to 30 (the synthesized one-shots
     # are loud); external audio falls back to startup_volume.
-    startup_fx_volume  = cfg.get_int("startup_fx_volume", 30)
+    startup_fx_volume  = cfg.get_int("startup_fx_volume", 2)
     startup_ext_volume = cfg.get_int("startup_ext_volume", startup_volume)
     accept_on_boot = cfg.get_bool("accept_on_boot", True)
     debounce_ms    = cfg.get_int("debounce_ms", 300)

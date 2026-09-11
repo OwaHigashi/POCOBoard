@@ -388,7 +388,7 @@ class AudioEngine(QObject):
         # operator needs to balance them separately.
         # FX default 30 % (was 80 %): the synthesized one-shots are loud
         # and the operator kept turning them down on the rig.
-        self._fx_volume  = 0.3
+        self._fx_volume  = 0.02
         self._ext_volume = 0.8
         # Per-kind gain multiplied onto the 効果音 slider (config
         # fx_volume_<kind>_pct).  BOMB is synthesized far hotter than the
