@@ -401,6 +401,71 @@ INDEX_HTML = r"""<!doctype html>
     text-decoration: none;
   }
   .gi .acts a.dl { background: #edf4f1; border-color: #bfd0c8; font-weight: 600; }
+  /* ---- 画像ビューア (スマホで保存するための全画面表示) ----
+     Smartphones (and especially in-app browsers such as Pococha's / LINE's
+     WKWebView) cannot run the <a download> / Content-Disposition download
+     path: nothing happens, or a blank tab opens.  What always works on a
+     phone is a long-press on a plain <img> ("写真に追加" on iOS, "画像を
+     ダウンロード" on Android), so 保存 opens this viewer instead. */
+  #lightbox {
+    position: fixed;
+    inset: 0;
+    z-index: 1000;
+    display: none;
+    flex-direction: column;
+    background: rgba(20, 17, 14, 0.96);
+    color: #fff;
+    padding: max(10px, env(safe-area-inset-top)) 12px max(12px, env(safe-area-inset-bottom));
+    box-sizing: border-box;
+  }
+  #lightbox.show { display: flex; }
+  #lightbox .lb-img {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  #lightbox img {
+    max-width: 100%;
+    max-height: 100%;
+    object-fit: contain;
+    border-radius: 6px;
+    -webkit-touch-callout: default;   /* iOS: 長押しメニュー (写真に追加) を出す */
+    user-select: auto;
+    -webkit-user-select: auto;
+  }
+  #lightbox .lb-name {
+    font-size: 12px;
+    opacity: .8;
+    text-align: center;
+    padding: 6px 0 2px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  #lightbox .lb-hint {
+    font-size: 13px;
+    text-align: center;
+    padding: 4px 0 8px;
+    line-height: 1.5;
+  }
+  #lightbox .lb-hint b { color: #ffd98a; }
+  #lightbox .lb-acts { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; }
+  #lightbox .lb-acts a,
+  #lightbox .lb-acts button {
+    font-size: 14px;
+    padding: 10px 14px;
+    border-radius: 12px;
+    border: 1px solid rgba(255,255,255,.35);
+    background: rgba(255,255,255,.12);
+    color: #fff;
+    text-decoration: none;
+    cursor: pointer;
+    min-width: 96px;
+    text-align: center;
+  }
+  #lightbox .lb-acts .primary { background: #3b7a63; border-color: #5aa084; font-weight: 600; }
   .board-new {
     position: sticky;
     bottom: 6px;
@@ -779,10 +844,23 @@ INDEX_HTML = r"""<!doctype html>
     </div>
     <div id="galleryGrid"></div>
     <div style="font-size:12px; opacity:.75;">
-      ※ このセッション (POCOBoard 起動後) に画面へ出た写真・生成画像。新しいものが先頭。「保存」でダウンロードできます。
+      ※ このセッション (POCOBoard 起動後) に画面へ出た写真・生成画像。新しいものが先頭。「保存」でダウンロードできます
+      (スマホでは画像が大きく開くので、長押し → 「写真に追加」/「画像をダウンロード」で保存)。
     </div>
   </div>
 </main>
+
+<div id="lightbox" role="dialog" aria-modal="true" aria-label="画像">
+  <div class="lb-img"><img id="lbImg" alt=""></div>
+  <div class="lb-name" id="lbName"></div>
+  <div class="lb-hint" id="lbHint"></div>
+  <div class="lb-acts">
+    <button id="lbShare" class="primary" hidden>📤 共有 / 写真に保存</button>
+    <a id="lbDl" class="primary" href="#" download>⬇ ダウンロード</a>
+    <a id="lbOpen" href="#" target="_blank" rel="noopener">別タブで開く</a>
+    <button id="lbClose">閉じる</button>
+  </div>
+</div>
 
 <footer><span style="opacity:.8; font-weight:600; letter-spacing:1px;">Programmed by ぽこちゃ技術枠　おわ</span></footer>
 
@@ -1468,20 +1546,108 @@ const galleryGrid  = document.getElementById('galleryGrid');
 const galleryCount = document.getElementById('galleryCount');
 let galleryLast = 0, galleryEpoch = null, galleryTotal = 0, galleryHidden = false;
 function fmtKB(n) { return n >= 1024 * 1024 ? (n / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' KB'; }
+// Phones / tablets: touch as the primary pointer, or an iPad that
+// pretends to be a Mac.  For them 保存 opens the in-page viewer (see
+// #lightbox) because a download link does nothing in most mobile /
+// in-app browsers; desktops keep the direct download.
+const IS_MOBILE = (() => {
+  try {
+    if (matchMedia('(pointer: coarse)').matches) return true;
+  } catch (_) {}
+  const ua = navigator.userAgent || '';
+  return /Android|iPhone|iPad|iPod|Mobile/i.test(ua) ||
+         (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+})();
+const IS_IOS = /iPhone|iPad|iPod/i.test(navigator.userAgent || '') ||
+               (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+
 function galleryRender(e) {
   const card = document.createElement('div');
   card.className = 'gi';
   const src = api('media/' + encodeURIComponent(e.name));
   const dl  = src + '?dl=1';
+  const fname = e.orig || e.name;
   card.innerHTML =
     '<a class="thumb" href="' + src + '" target="_blank" rel="noopener"><img loading="lazy" alt=""></a>' +
-    '<div class="meta" title="' + escHtml(e.orig || e.name) + '"><b>' + escHtml(e.t || '') + '</b> ' + escHtml(e.who || '') + '</div>' +
-    '<div class="meta">' + escHtml(e.orig || e.name) + ' · ' + fmtKB(e.size || 0) + '</div>' +
+    '<div class="meta" title="' + escHtml(fname) + '"><b>' + escHtml(e.t || '') + '</b> ' + escHtml(e.who || '') + '</div>' +
+    '<div class="meta">' + escHtml(fname) + ' · ' + fmtKB(e.size || 0) + '</div>' +
     '<div class="acts"><a href="' + src + '" target="_blank" rel="noopener">開く</a>' +
-    '<a class="dl" href="' + dl + '" download="' + escHtml(e.orig || e.name) + '">⬇ 保存</a></div>';
+    '<a class="dl" href="' + dl + '" download="' + escHtml(fname) + '">⬇ 保存</a></div>';
   card.querySelector('img').src = src;
+  // Thumbnail tap always opens the viewer (a new tab is often blocked in
+  // in-app browsers); 保存 goes through the viewer on phones only.
+  card.querySelector('a.thumb').addEventListener('click', (ev) => {
+    ev.preventDefault();
+    openLightbox(src, dl, fname);
+  });
+  card.querySelector('a.dl').addEventListener('click', (ev) => {
+    if (!IS_MOBILE) return;               // desktop: plain download
+    ev.preventDefault();
+    openLightbox(src, dl, fname);
+  });
   return card;
 }
+
+// ---- 画像ビューア (#lightbox) ----
+const lightbox = document.getElementById('lightbox');
+const lbImg    = document.getElementById('lbImg');
+const lbName   = document.getElementById('lbName');
+const lbHint   = document.getElementById('lbHint');
+const lbShare  = document.getElementById('lbShare');
+const lbDl     = document.getElementById('lbDl');
+const lbOpen   = document.getElementById('lbOpen');
+let lbCurrent = null;   // { src, dl, name }
+
+function canShareFiles() {
+  // Web Share with files needs a secure context (https / localhost).
+  // Over plain http on the LAN it is simply absent, so the button hides.
+  return !!(navigator.share && navigator.canShare && window.isSecureContext);
+}
+
+function openLightbox(src, dl, name) {
+  lbCurrent = { src, dl, name };
+  lbImg.src = src;
+  lbImg.alt = name;
+  lbName.textContent = name;
+  lbDl.href = dl;
+  lbDl.setAttribute('download', name);
+  lbOpen.href = src;
+  lbShare.hidden = !canShareFiles();
+  if (IS_MOBILE) {
+    lbHint.innerHTML = IS_IOS
+      ? '画像を<b>長押し</b> → 「<b>写真に追加</b>」(または「画像を保存」) で保存できます'
+      : '画像を<b>長押し</b> → 「<b>画像をダウンロード</b>」で保存できます';
+  } else {
+    lbHint.textContent = '';
+  }
+  lightbox.classList.add('show');
+  document.body.style.overflow = 'hidden';
+}
+function closeLightbox() {
+  lightbox.classList.remove('show');
+  document.body.style.overflow = '';
+  lbImg.removeAttribute('src');
+  lbCurrent = null;
+}
+document.getElementById('lbClose').onclick = closeLightbox;
+lightbox.addEventListener('click', (ev) => { if (ev.target === lightbox || ev.target.classList.contains('lb-img')) closeLightbox(); });
+document.addEventListener('keydown', (ev) => { if (ev.key === 'Escape' && lightbox.classList.contains('show')) closeLightbox(); });
+lbShare.onclick = async () => {
+  if (!lbCurrent) return;
+  try {
+    const r = await fetch(lbCurrent.src, { cache: 'force-cache' });
+    const blob = await r.blob();
+    const file = new File([blob], lbCurrent.name, { type: blob.type || 'image/jpeg' });
+    if (navigator.canShare({ files: [file] })) {
+      await navigator.share({ files: [file], title: lbCurrent.name });
+      return;
+    }
+  } catch (e) {
+    if (e && e.name === 'AbortError') return;   // user dismissed the sheet
+  }
+  // Could not share the file itself: fall back to the download link.
+  lbDl.click();
+};
 async function refreshGallery() {
   if (galleryHidden || document.hidden) return;
   try {
