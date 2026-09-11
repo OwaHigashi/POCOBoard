@@ -392,6 +392,8 @@ def main() -> int:
     # (if auto-play is ON, which is the default) also triggers immediate
     # display.  Push-play mode keeps items waiting for the ▶ button.
     bridge.mediaUploaded.connect(ctrl.on_media_uploaded)
+    # First decoded frame of each clip → gallery thumbnail.
+    display.videoPosterReady.connect(bridge.set_video_poster)
     # Per-user 取消 (browser-side) — the handler stops only items owned
     # by the requesting client.
     bridge.myStopRequested.connect(ctrl.on_my_stop)

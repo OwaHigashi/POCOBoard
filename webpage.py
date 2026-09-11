@@ -374,13 +374,22 @@ INDEX_HTML = r"""<!doctype html>
     overflow: hidden;
     background: #1d1a17;
   }
-  .gi img,
-  .gi video {
+  .gi img {
     width: 100%;
     height: 100%;
     object-fit: contain;
     display: block;
-    pointer-events: none;   /* the wrapping link handles the tap */
+  }
+  .gi .ph {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    color: #cfc6ba;
+    font-size: 13px;
+    line-height: 1.4;
   }
   .gi a.thumb { position: relative; }
   .gi a.thumb .badge {
@@ -414,73 +423,6 @@ INDEX_HTML = r"""<!doctype html>
     text-decoration: none;
   }
   .gi .acts a.dl { background: #edf4f1; border-color: #bfd0c8; font-weight: 600; }
-  /* ---- 画像ビューア (スマホで保存するための全画面表示) ----
-     Smartphones (and especially in-app browsers such as Pococha's / LINE's
-     WKWebView) cannot run the <a download> / Content-Disposition download
-     path: nothing happens, or a blank tab opens.  What always works on a
-     phone is a long-press on a plain <img> ("写真に追加" on iOS, "画像を
-     ダウンロード" on Android), so 保存 opens this viewer instead. */
-  #lightbox {
-    position: fixed;
-    inset: 0;
-    z-index: 1000;
-    display: none;
-    flex-direction: column;
-    background: rgba(20, 17, 14, 0.96);
-    color: #fff;
-    padding: max(10px, env(safe-area-inset-top)) 12px max(12px, env(safe-area-inset-bottom));
-    box-sizing: border-box;
-  }
-  #lightbox.show { display: flex; }
-  #lightbox .lb-img {
-    flex: 1;
-    min-height: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-  }
-  #lightbox img,
-  #lightbox video {
-    max-width: 100%;
-    max-height: 100%;
-    object-fit: contain;
-    border-radius: 6px;
-    -webkit-touch-callout: default;   /* iOS: 長押しメニュー (写真に追加) を出す */
-    user-select: auto;
-    -webkit-user-select: auto;
-  }
-  #lightbox video { width: 100%; background: #000; }
-  #lightbox .lb-name {
-    font-size: 12px;
-    opacity: .8;
-    text-align: center;
-    padding: 6px 0 2px;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-  #lightbox .lb-hint {
-    font-size: 13px;
-    text-align: center;
-    padding: 4px 0 8px;
-    line-height: 1.5;
-  }
-  #lightbox .lb-hint b { color: #ffd98a; }
-  #lightbox .lb-acts { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; }
-  #lightbox .lb-acts a,
-  #lightbox .lb-acts button {
-    font-size: 14px;
-    padding: 10px 14px;
-    border-radius: 12px;
-    border: 1px solid rgba(255,255,255,.35);
-    background: rgba(255,255,255,.12);
-    color: #fff;
-    text-decoration: none;
-    cursor: pointer;
-    min-width: 96px;
-    text-align: center;
-  }
-  #lightbox .lb-acts .primary { background: #3b7a63; border-color: #5aa084; font-weight: 600; }
   .board-new {
     position: sticky;
     bottom: 6px;
@@ -859,14 +801,11 @@ INDEX_HTML = r"""<!doctype html>
     </div>
     <div id="galleryGrid"></div>
     <div style="font-size:12px; opacity:.75;">
-      ※ このセッション (POCOBoard 起動後) に画面へ出た写真・動画・生成画像・生成動画。新しいものが先頭。「保存」でダウンロードできます
-      (スマホでは大きく開くので、画像は長押し → 「写真に追加」/「画像をダウンロード」、動画は「⬇ ダウンロード」で保存)。
+      ※ このセッション (POCOBoard 起動後) に画面へ出た写真・動画・生成画像・生成動画。新しいものが先頭。「保存」でダウンロードできます。
+      動画のサムネイルは画面で再生されたときに付きます。Pococha のアプリ内ブラウザで保存できないときは、右上メニューから Safari / Chrome で開いてください。
     </div>
   </div>
 </main>
-
-<div id="lightbox" role="dialog" aria-modal="true" aria-label="画像">
-  <div class="lb-img"><img id="lbImg" alt=""><video id="lbVideo" controls playsinline preload="metadata" hidden></video></div>
   <div class="lb-name" id="lbName"></div>
   <div class="lb-hint" id="lbHint"></div>
   <div class="lb-acts">
@@ -1562,23 +1501,15 @@ const galleryGrid  = document.getElementById('galleryGrid');
 const galleryCount = document.getElementById('galleryCount');
 let galleryLast = 0, galleryEpoch = null, galleryTotal = 0, galleryHidden = false;
 function fmtKB(n) { return n >= 1024 * 1024 ? (n / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' KB'; }
-// Phones / tablets: touch as the primary pointer, or an iPad that
-// pretends to be a Mac.  For them 保存 opens the in-page viewer (see
-// #lightbox) because a download link does nothing in most mobile /
-// in-app browsers; desktops keep the direct download.
-const IS_MOBILE = (() => {
-  try {
-    if (matchMedia('(pointer: coarse)').matches) return true;
-  } catch (_) {}
-  const ua = navigator.userAgent || '';
-  return /Android|iPhone|iPad|iPod|Mobile/i.test(ua) ||
-         (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
-})();
-const IS_IOS = /iPhone|iPad|iPod/i.test(navigator.userAgent || '') ||
-               (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
-
 const VIDEO_EXT = /\.(mp4|webm|mov|m4v|mkv)$/i;
 function isVideoEntry(e) { return e.kind === 'video' || VIDEO_EXT.test(e.name || ''); }
+const galleryCards = {};   // name -> card element (to back-fill video posters)
+function posterHtml(e) {
+  // Video thumbnail = poster JPEG of the first frame, written by the host
+  // when the clip first plays on the display; until then a placeholder.
+  if (e.poster) return '<img loading="lazy" alt="" src="' + api('media/' + encodeURIComponent(e.poster)) + '">';
+  return '<div class="ph">🎬<br>動画</div>';
+}
 function galleryRender(e) {
   const card = document.createElement('div');
   card.className = 'gi';
@@ -1586,109 +1517,27 @@ function galleryRender(e) {
   const dl  = src + '?dl=1';
   const fname = e.orig || e.name;
   const video = isVideoEntry(e);
-  // Video thumbnail = the first frame (preload=metadata), with a 🎬 badge.
-  const thumb = video
-    ? '<video muted playsinline preload="metadata"></video><span class="badge">🎬 動画</span>'
-    : '<img loading="lazy" alt="">';
+  const thumb = video ? posterHtml(e) + '<span class="badge">🎬 動画</span>' : '<img loading="lazy" alt="">';
   card.innerHTML =
     '<a class="thumb" href="' + src + '" target="_blank" rel="noopener">' + thumb + '</a>' +
     '<div class="meta" title="' + escHtml(fname) + '"><b>' + escHtml(e.t || '') + '</b> ' + escHtml(e.who || '') + '</div>' +
     '<div class="meta">' + escHtml(fname) + ' · ' + fmtKB(e.size || 0) + '</div>' +
     '<div class="acts"><a href="' + src + '" target="_blank" rel="noopener">開く</a>' +
     '<a class="dl" href="' + dl + '" download="' + escHtml(fname) + '">⬇ 保存</a></div>';
-  card.querySelector(video ? 'video' : 'img').src = video ? src + '#t=0.1' : src;
-  // Thumbnail tap always opens the viewer (a new tab is often blocked in
-  // in-app browsers); 保存 goes through the viewer on phones only.
-  card.querySelector('a.thumb').addEventListener('click', (ev) => {
-    ev.preventDefault();
-    openLightbox(src, dl, fname, video);
-  });
-  card.querySelector('a.dl').addEventListener('click', (ev) => {
-    if (!IS_MOBILE) return;               // desktop: plain download
-    ev.preventDefault();
-    openLightbox(src, dl, fname, video);
-  });
+  if (!video) card.querySelector('img').src = src;
+  galleryCards[e.name] = card;
   return card;
 }
-
-// ---- 画像ビューア (#lightbox) ----
-const lightbox = document.getElementById('lightbox');
-const lbImg    = document.getElementById('lbImg');
-const lbVideo  = document.getElementById('lbVideo');
-const lbName   = document.getElementById('lbName');
-const lbHint   = document.getElementById('lbHint');
-const lbShare  = document.getElementById('lbShare');
-const lbDl     = document.getElementById('lbDl');
-const lbOpen   = document.getElementById('lbOpen');
-let lbCurrent = null;   // { src, dl, name, video }
-
-function canShareFiles() {
-  // Web Share with files needs a secure context (https / localhost).
-  // Over plain http on the LAN it is simply absent, so the button hides.
-  return !!(navigator.share && navigator.canShare && window.isSecureContext);
-}
-
-function openLightbox(src, dl, name, video) {
-  video = !!video;
-  lbCurrent = { src, dl, name, video };
-  lbImg.hidden = video;
-  lbVideo.hidden = !video;
-  if (video) {
-    lbImg.removeAttribute('src');
-    lbVideo.src = src;
-  } else {
-    lbVideo.pause();
-    lbVideo.removeAttribute('src');
-    lbImg.src = src;
-    lbImg.alt = name;
+function applyPosters(map) {
+  for (const name in (map || {})) {
+    const card = galleryCards[name];
+    if (!card || card.dataset.poster) continue;
+    const a = card.querySelector('a.thumb');
+    if (!a) continue;
+    card.dataset.poster = map[name];
+    a.innerHTML = posterHtml({ poster: map[name] }) + '<span class="badge">🎬 動画</span>';
   }
-  lbName.textContent = name;
-  lbDl.href = dl;
-  lbDl.setAttribute('download', name);
-  lbOpen.href = src;
-  lbShare.hidden = !canShareFiles();
-  if (IS_MOBILE && video) {
-    lbHint.innerHTML = IS_IOS
-      ? '「<b>⬇ ダウンロード</b>」→ 「ダウンロード」を許可すると<b>ファイル App</b> に保存されます '
-        + '(写真に入れるにはファイル App でその動画を開き、共有 → 「<b>ビデオを保存</b>」)'
-      : '「<b>⬇ ダウンロード</b>」で端末の Download フォルダに保存されます (ギャラリー / Files アプリから見られます)';
-  } else if (IS_MOBILE) {
-    lbHint.innerHTML = IS_IOS
-      ? '画像を<b>長押し</b> → 「<b>写真に追加</b>」(または「画像を保存」) で保存できます'
-      : '画像を<b>長押し</b> → 「<b>画像をダウンロード</b>」で保存できます';
-  } else {
-    lbHint.textContent = '';
-  }
-  lightbox.classList.add('show');
-  document.body.style.overflow = 'hidden';
 }
-function closeLightbox() {
-  lightbox.classList.remove('show');
-  document.body.style.overflow = '';
-  lbImg.removeAttribute('src');
-  lbVideo.pause();
-  lbVideo.removeAttribute('src');
-  lbCurrent = null;
-}
-document.getElementById('lbClose').onclick = closeLightbox;
-lightbox.addEventListener('click', (ev) => { if (ev.target === lightbox || ev.target.classList.contains('lb-img')) closeLightbox(); });
-document.addEventListener('keydown', (ev) => { if (ev.key === 'Escape' && lightbox.classList.contains('show')) closeLightbox(); });
-lbShare.onclick = async () => {
-  if (!lbCurrent) return;
-  try {
-    const r = await fetch(lbCurrent.src, { cache: 'force-cache' });
-    const blob = await r.blob();
-    const file = new File([blob], lbCurrent.name, { type: blob.type || (lbCurrent.video ? 'video/mp4' : 'image/jpeg') });
-    if (navigator.canShare({ files: [file] })) {
-      await navigator.share({ files: [file], title: lbCurrent.name });
-      return;
-    }
-  } catch (e) {
-    if (e && e.name === 'AbortError') return;   // user dismissed the sheet
-  }
-  // Could not share the file itself: fall back to the download link.
-  lbDl.click();
-};
 async function refreshGallery() {
   if (galleryHidden || document.hidden) return;
   try {
@@ -1697,10 +1546,12 @@ async function refreshGallery() {
     const j = await r.json();
     if (galleryEpoch !== null && j.epoch !== galleryEpoch) {
       galleryGrid.innerHTML = ''; galleryLast = 0; galleryTotal = 0; galleryEpoch = j.epoch;
+      for (const k in galleryCards) delete galleryCards[k];
       return refreshGallery();
     }
     galleryEpoch = j.epoch;
     const items = j.items || [];
+    applyPosters(j.posters);
     if (!items.length) { if (j.last < galleryLast) galleryLast = j.last; return; }
     for (const e of items) {           // oldest→newest from the server; newest ends up on top
       galleryGrid.insertBefore(galleryRender(e), galleryGrid.firstChild);
@@ -1708,6 +1559,7 @@ async function refreshGallery() {
     }
     galleryTotal += items.length;
     galleryCount.textContent = galleryTotal + ' 枚';
+    applyPosters(j.posters);           // posters for the cards just drawn
   } catch (e) { /* network blip */ }
 }
 document.getElementById('btnGalleryHide').onclick = (ev) => {

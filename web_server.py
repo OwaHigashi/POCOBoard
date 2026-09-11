@@ -23,9 +23,12 @@ Endpoints:
   GET  /gallery?since=N  JSON: pictures and videos shown in THIS session
                          (uploaded photos / videos + AI-generated images
                          / videos), newest last — {epoch, last, items:
-                         [{id, t, kind, name, orig, size, who}]}.  Starts
-                         empty on every process start; the files
-                         themselves stay on disk.
+                         [{id, t, kind, name, orig, size, who, poster?}],
+                         posters:{video name: poster name}}.  poster = a
+                         JPEG of the clip's first frame (written when the
+                         clip first plays on the display).  Starts empty
+                         on every process start; the files themselves
+                         stay on disk.
   GET  /media/<name>     the picture / video file itself (only names
                          listed by /gallery in this session); ?dl=1
                          forces a download (Content-Disposition:
@@ -356,8 +359,27 @@ class WebBridge(QObject):
                      for e in self._gallery if e["id"] > since]
             if len(items) > limit:
                 items = items[-limit:]
+            # Posters appear after the item (when the clip first plays), so
+            # every response carries the full map and the page back-fills
+            # cards it already drew.
+            posters = {e["name"]: e["poster"] for e in self._gallery if e.get("poster")}
             return {"epoch": self._board_epoch, "last": self._gallery_seq,
-                    "items": items}
+                    "items": items, "posters": posters}
+
+    @Slot(str, str)
+    def set_video_poster(self, video_path: str, poster_path: str) -> None:
+        """Attach the first-frame JPEG the display just wrote to the
+        gallery entry of that clip, and make it servable via /media."""
+        vname = os.path.basename(video_path)
+        pname = os.path.basename(poster_path)
+        with self._lock:
+            e = self._gallery_by_name.get(vname)
+            if e is None or e.get("kind") == "poster":
+                return
+            e["poster"] = pname
+            self._gallery_by_name[pname] = {
+                "id": 0, "kind": "poster", "name": pname, "orig": pname,
+                "size": 0, "who": "", "cid": "", "path": poster_path}
 
     def gallery_lookup(self, name: str) -> Optional[dict]:
         with self._lock:
@@ -365,10 +387,11 @@ class WebBridge(QObject):
             return dict(e) if e else None
 
     def gallery_paths(self) -> list[str]:
-        """Files listed in this session's gallery — kept out of the cache
-        prune so a listed video can still be downloaded later."""
+        """Files listed in this session's gallery (and their posters) —
+        kept out of the cache prune so a listed video can still be
+        downloaded later."""
         with self._lock:
-            return [e["path"] for e in self._gallery]
+            return [e["path"] for e in self._gallery_by_name.values()]
 
     def is_piano_mode(self) -> bool:
         with self._lock:

@@ -58,6 +58,9 @@ class DisplayWindow(QWidget):
     # stop the current background from the browser-side "自分のを取消" button.
     ownershipChanged = Signal(str, str)
     visualPlaybackStopped = Signal()
+    # (video_path, poster_path) — a JPEG of the first decoded frame of a
+    # clip, written next to it so the browser gallery can show a thumbnail.
+    videoPosterReady = Signal(str, str)
     # Emitted whenever piano-roll mode toggles. `bool` = active.
     pianoModeChanged = Signal(bool)
     # (compact) — emitted whenever the piano-roll layout flips between
@@ -166,6 +169,9 @@ class DisplayWindow(QWidget):
         # Cleared on stop / error so we don't keep a stale poster on
         # screen after playback finishes.
         self._latest_video_image: Optional[QImage] = None
+        # Local file of the clip now playing whose poster JPEG is still to
+        # be written (cleared once the first frame is saved).
+        self._video_poster_pending: str = ""
         # Minimum playback duration (seconds).  If the natural clip length is
         # shorter than this, the player restarts from position 0 on each
         # end-of-media until the total elapsed playback meets the minimum.
@@ -1056,6 +1062,23 @@ class DisplayWindow(QWidget):
         # No explicit update() — _tick repaints on the next 16 ms tick
         # when it sees the dirty flag.
         self._frame_dirty = True
+        if self._video_poster_pending:
+            self._save_video_poster(img)
+
+    def _save_video_poster(self, img: QImage) -> None:
+        """Write <clip>.poster.jpg (max 480 px wide) from the first frame
+        and announce it (videoPosterReady).  One-shot per clip; failures
+        are silent — the gallery then simply shows a placeholder."""
+        path = self._video_poster_pending
+        self._video_poster_pending = ""
+        poster = path + ".poster.jpg"
+        try:
+            small = img if img.width() <= 480 else img.scaledToWidth(
+                480, Qt.TransformationMode.SmoothTransformation)
+            if small.save(poster, "JPEG", 80):
+                self.videoPosterReady.emit(path, poster)
+        except Exception:
+            pass
 
     @Slot(str)
     @Slot(str, str)
@@ -1161,6 +1184,10 @@ class DisplayWindow(QWidget):
         self._latest_video_image = None
         url = QUrl.fromLocalFile(path) if os.path.isfile(path) else QUrl(path)
         self._video_url = url
+        # First decoded frame becomes the gallery thumbnail (see
+        # _on_video_frame); skip if one already exists from an earlier play.
+        self._video_poster_pending = (
+            path if os.path.isfile(path) and not os.path.isfile(path + ".poster.jpg") else "")
         self._video_start_ms = time.perf_counter_ns() / 1_000_000.0
         self._video_player.setSource(url)
         self._video_player.play()

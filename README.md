@@ -313,14 +313,11 @@ http://192.168.1.23:8080/
   - 遡れる行数は `config.ini` の `text_log_max`（既定 500）。メモリ上のみで、再起動で消えます。
 - 画像・動画一覧
   - このセッション（POCOBoard 起動後）に画面へ出た写真・動画・おわくさの生成画像・生成動画がサムネイルで
-    並びます（新しいものが先頭。動画は先頭フレーム + 🎬 バッジ）。
-    「開く」で原寸表示（動画はページ内で再生）、「保存」でダウンロードできます。
-    動画はスマホでも「⬇ ダウンロード」で保存します（iOS はファイル App に入るので、写真に入れるには
-    ファイル App から共有 → 「ビデオを保存」）。
-    スマホ (iPhone / Android、Pococha や LINE のアプリ内ブラウザを含む) ではダウンロードが
-    効かないことがあるので、サムネイルや「保存」をタップすると画像がページ内で大きく開き、
-    長押し → 「写真に追加」(iOS) / 「画像をダウンロード」(Android) で保存できます。
-    https で開いている場合は「共有 / 写真に保存」ボタン (Web Share) も使えます。
+    並びます（新しいものが先頭）。「開く」で原寸表示（動画はブラウザで再生）、「保存」でダウンロードできます。
+  - 動画のサムネイルは、その動画が Display で再生されたときの最初のフレームを `<ファイル名>.poster.jpg` として
+    `cache/uploads` に書き出したもので、再生されるまでは「🎬 動画」のプレースホルダです。
+  - Pococha のアプリ内ブラウザではダウンロードが動かないことがあります。その場合は右上メニューから
+    Safari / Chrome で開いてください（ページの機能ではなくアプリ内ブラウザの制限）。
   - 一覧は POCOBoard を起動するたびに空から始まります。ファイル自体は `cache/uploads` に残り続けます
     （既定では削除しません。`upload_prune_max` 参照）。
 
@@ -429,7 +426,7 @@ http://<IP>:<port>/
 | POST | `/marquee/stop` | - | 横スクロール停止 |
 | POST | `/ai` | JSON（下記） | おわくさ AI の画面操作。`X-Poco-AI-Token` ヘッダ（`ai_token` 設定時） |
 | GET | `/ai/status` | - | `{mode, comment:{count,size_pct}, marquee:{used,size_pct}, last_ai_ms, ai_url}` |
-| GET | `/gallery?since=N` | - | このセッションに画面へ出た画像・動画の一覧 `{epoch, last, items:[{id, t, kind, name, orig, size, who}]}`（`kind` = image / video）。起動ごとに空から |
+| GET | `/gallery?since=N` | - | このセッションに画面へ出た画像・動画の一覧 `{epoch, last, items:[{id, t, kind, name, orig, size, who, poster?}], posters:{動画名: ポスター名}}`（`kind` = image / video。`poster` は再生時に作る先頭フレームの JPEG）。起動ごとに空から |
 | GET | `/media/<name>` | `?dl=1` で保存 | `/gallery` に載っている画像・動画ファイル本体（それ以外の名前は 404）。`dl=1` で `Content-Disposition: attachment`（元のファイル名） |
 | GET | `/board?since=N&limit=500` | - | 画面の文字ログ。id が `N` より新しい行を返す `{epoch, last, mode, items:[{id, t, src, who, text, kind}]}`。`src` = `comment` / `marquee` / `clear`、`text` は装飾タグ付きの原文。`epoch` は起動ごとに変わる（再起動検知用） |
 | POST | `/name` | `{"name":"Alice"}` | 表示名保存 |
