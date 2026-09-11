@@ -879,10 +879,11 @@ class ControlWindow(QWidget):
         self.tabs.addTab(self._scrollable(self._build_fx_tab()),     "✨ エフェクト")
         self.tabs.addTab(self._scrollable(self._build_marquee_tab()), "📢 横スクロール")
         self.tabs.addTab(self._scrollable(self._build_display_tab()), "🖥 表示")
+        self.tabs.addTab(self._scrollable(self._build_piano_tab()),   "🎹 ピアノロール")
         self.tabs.addTab(self._build_queue_tab(),                     "📥 キュー")
         self.tabs.addTab(self._build_users_tab(),                     "👥 ユーザー")
         self.tabs.addTab(self._build_log_tab(),                       "📜 ログ")
-        self.QUEUE_TAB_INDEX = 3
+        self.QUEUE_TAB_INDEX = 4
         # Clear the attention color once the operator actually looks at the queue.
         self.tabs.currentChanged.connect(self._on_tab_changed)
         root.addWidget(self.tabs, stretch=1)
@@ -1457,11 +1458,9 @@ class ControlWindow(QWidget):
         camera_box = self._build_camera_box()
         dl.addWidget(camera_box, 7, 0, 1, 3)
 
-        # ---- Piano roll (USB MIDI) ----
-        piano_box = self._build_piano_box()
-        dl.addWidget(piano_box, 8, 0, 1, 3)
-
-        dl.setRowStretch(9, 1)
+        # (The 🎹 ピアノロール panel used to sit here; it now has its own
+        # tab right after this one — see _build_piano_tab.)
+        dl.setRowStretch(8, 1)
         # Both spinboxes exist now — paint the mode buttons' captions
         # (they show each preset's values) and checked state.
         self._refresh_hstretch_ui()
@@ -1684,6 +1683,17 @@ class ControlWindow(QWidget):
     def _on_cam_hstretch_changed(self, v: int) -> None:
         self.display.set_camera_hstretch(v / 100.0)
         self._refresh_hstretch_ui()
+
+    # ---- tab: piano roll (USB MIDI) ----
+    def _build_piano_tab(self) -> QWidget:
+        """Own tab (right after 🖥 表示) holding the piano-roll panel."""
+        w = QWidget()
+        pl = QVBoxLayout(w)
+        pl.setContentsMargins(10, 12, 10, 10)
+        pl.setSpacing(10)
+        pl.addWidget(self._build_piano_box())
+        pl.addStretch(1)
+        return w
 
     # ---- piano roll (USB MIDI) controls ----
     def _build_piano_box(self) -> QWidget:

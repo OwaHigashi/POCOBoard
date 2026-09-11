@@ -111,9 +111,9 @@ def main() -> int:
     # (legacy Niconico lanes; a marquee that scrolls off is gone for good).
     # AI "marquee" commands still fly as lanes in either mode.
     # comment_size_pct follows the marquee size convention
-    # (100 = marquee_size); falls back to marquee_size_pct.
+    # (100 = marquee_size); default 60 %.
     text_mode          = cfg.get_str("text_mode", "comment").strip().lower()
-    comment_size_pct   = cfg.get_int("comment_size_pct", marquee_size_pct)
+    comment_size_pct   = cfg.get_int("comment_size_pct", 60)
     comment_max_lines  = cfg.get_int("comment_max_lines", 12)
     comment_ttl_sec    = cfg.get_float("comment_ttl_sec", 0.0)
     comment_width_pct  = cfg.get_int("comment_width_pct", 92)
@@ -182,11 +182,14 @@ def main() -> int:
     piano_roll_op = cfg.get_int("piano_roll_opacity_pct", 65)
     piano_img_op  = cfg.get_int("piano_image_opacity_pct", 35)
     piano_vid_op  = cfg.get_int("piano_video_opacity_pct", 35)
+    # Piano-roll mode ON at boot (default true; the operator can still
+    # switch it off from the 🎹 ピアノロール tab).
+    piano_on_boot = cfg.get_bool("piano_on_boot", True)
     # Piano-roll layout: full (roll covers the screen, photos / videos /
     # FX overlay translucently) or compact (roll confined to a strip at
     # the bottom — piano_compact_height_pct of the screen — while photos
-    # / videos / FX show at full brightness above it).
-    piano_compact     = cfg.get_bool("piano_compact", False)
+    # / videos / FX show at full brightness above it).  Default compact.
+    piano_compact     = cfg.get_bool("piano_compact", True)
     piano_compact_pct = cfg.get_int("piano_compact_height_pct", 20)
     piano_compact_op  = cfg.get_int("piano_compact_opacity_pct", 65)
     piano_compact_pos = cfg.get_str("piano_compact_position", "bottom")
@@ -342,6 +345,10 @@ def main() -> int:
     ctrl.set_selected_screen(disp_screen)
     if fs_default:
         ctrl.set_fullscreen_ui(True)
+    # After the control window exists so pianoModeChanged syncs its
+    # button + the web bridge's piano_mode flag.
+    if piano_on_boot:
+        display.set_piano_mode(True)
 
     # Anchor control window on the chosen control screen, centered.
     # If the window is taller than the available area (small monitor +

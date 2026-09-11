@@ -169,7 +169,7 @@ http://192.168.1.23:8080/
 - `COMMENT モード (おわくさ AI フィード)` 欄
   - `文字サイズ` 25〜500%（横スクロールと同じ基準。100% = `marquee_size`）。
     横スクロールと違い、変更しても表示中の行は消えず、新しいサイズで折り返し直されます。
-    起動時の値は `comment_size_pct`（未指定なら `marquee_size_pct`）。
+    起動時の値は `comment_size_pct`（既定 60）。
   - `最大行数` — 画面に保持するエントリ数。超えた分は古い方から消えます（`comment_max_lines`）。
   - `表示秒数` — 各行が自動で消えるまでの秒数。0 = 上に押し出されるまで残る（`comment_ttl_sec`）。
   - `背景の濃さ` — 各行の後ろに敷く半透明の黒。カメラ映像の上でも読めるように（`comment_bg_pct`）。
@@ -230,7 +230,9 @@ http://192.168.1.23:8080/
   短くなり、最終画面で実際のピアノに近い鍵の縦横比になります。
   カメラ映像はこの補正を通らず、カメラ欄の `横引き延ばし` で別途
   補正します（config: `output_hstretch_pct1` / `output_hstretch_pct2`）。
-- 🎹 ピアノロール (USB MIDI)
+### ピアノロールタブ
+
+- 🎹 ピアノロール (USB MIDI) — 表示タブの次の独立タブ。起動時から ON（`piano_on_boot`）
   - 表示は 2 種類をボタンで切り替え:
     - **通常** — ロールが画面全体の土台になり、写真・動画・エフェクトは
       半透明で重なります（config: `piano_image_opacity_pct` 等）。
@@ -238,7 +240,8 @@ http://192.168.1.23:8080/
       `piano_compact_height_pct`）に縮め、写真・動画・エフェクトは
       暗くせず通常どおり表示。帯はその上に「ロールの濃さ」で半透明に
       重なります。演奏中に切り替えてもノートは消えません。起動時の
-      表示は `piano_compact`（既定 false = 通常）。
+      表示は `piano_compact`（既定 true = コンパクト・下）、起動時の
+      ON/OFF は `piano_on_boot`（既定 true）。
   - カメラ表示中は、ピアノロール自体が半透明でカメラ映像の上に重なり、
     映像は隠れません。濃さはパネルの「ロールの濃さ」
     （config: `piano_roll_opacity_pct`、既定 65%）で調整できます。
@@ -550,7 +553,8 @@ piano_fx_opacity_pct = 55     ; 通常表示: ロール上のエフェクト不�
 piano_roll_opacity_pct = 65   ; カメラ表示中のロール自体の不透明度
 piano_image_opacity_pct = 35  ; 通常表示: ロール上の写真の不透明度
 piano_video_opacity_pct = 35  ; 通常表示: ロール上の動画の不透明度
-piano_compact = false         ; true=コンパクト表示（帯・写真は暗くしない）
+piano_on_boot = true          ; 起動時からピアノロール ON
+piano_compact = true          ; true=コンパクト表示（帯・写真は暗くしない、既定）
 piano_compact_height_pct = 20 ; コンパクト帯の高さ (画面の %、10..50)。コメント・横スクロール文字は帯を避けて残りの領域に出る
 piano_compact_opacity_pct = 65 ; コンパクト帯の不透明度（下に写真等があるとき）
 piano_compact_position = bottom ; 帯の位置 bottom / top
@@ -563,7 +567,7 @@ marquee_pin_sec = 3.0      ; <ue>/<shita> 固定表示の秒数
 
 # ---- COMMENT mode (おわくさ AI フィード) ----
 text_mode = comment        ; 起動時の文字表示モード comment (既定) / marquee
-comment_size_pct = 40      ; フィード文字サイズ (25..500, 100 = marquee_size)。未指定なら marquee_size_pct
+comment_size_pct = 60      ; フィード文字サイズ (25..500, 100 = marquee_size)。既定 60
 comment_max_lines = 12     ; 画面に保持する行(エントリ)数
 comment_ttl_sec = 0        ; 各行の表示秒数 (0 = 上に押し出されるまで残す)
 comment_width_pct = 92     ; 行の最大幅 (画面幅 %)
