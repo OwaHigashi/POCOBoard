@@ -311,9 +311,12 @@ http://192.168.1.23:8080/
   - 新着は自動で最下部に追従（`自動で追う`）。上に遡っている間は追従せず `▼ 新着があります` の
     ボタンだけ出るので、読んでいる途中で飛ばされません。`たたむ` で折りたためます。
   - 遡れる行数は `config.ini` の `text_log_max`（既定 500）。メモリ上のみで、再起動で消えます。
-- 画像一覧
-  - このセッション（POCOBoard 起動後）に画面へ出た写真・おわくさの生成画像がサムネイルで並びます（新しいものが先頭）。
-    「開く」で原寸表示、「保存」でダウンロードできます。
+- 画像・動画一覧
+  - このセッション（POCOBoard 起動後）に画面へ出た写真・動画・おわくさの生成画像・生成動画がサムネイルで
+    並びます（新しいものが先頭。動画は先頭フレーム + 🎬 バッジ）。
+    「開く」で原寸表示（動画はページ内で再生）、「保存」でダウンロードできます。
+    動画はスマホでも「⬇ ダウンロード」で保存します（iOS はファイル App に入るので、写真に入れるには
+    ファイル App から共有 → 「ビデオを保存」）。
     スマホ (iPhone / Android、Pococha や LINE のアプリ内ブラウザを含む) ではダウンロードが
     効かないことがあるので、サムネイルや「保存」をタップすると画像がページ内で大きく開き、
     長押し → 「写真に追加」(iOS) / 「画像をダウンロード」(Android) で保存できます。
@@ -426,8 +429,8 @@ http://<IP>:<port>/
 | POST | `/marquee/stop` | - | 横スクロール停止 |
 | POST | `/ai` | JSON（下記） | おわくさ AI の画面操作。`X-Poco-AI-Token` ヘッダ（`ai_token` 設定時） |
 | GET | `/ai/status` | - | `{mode, comment:{count,size_pct}, marquee:{used,size_pct}, last_ai_ms, ai_url}` |
-| GET | `/gallery?since=N` | - | このセッションに画面へ出た画像の一覧 `{epoch, last, items:[{id, t, name, orig, size, who}]}`。起動ごとに空から |
-| GET | `/media/<name>` | `?dl=1` で保存 | `/gallery` に載っている画像ファイル本体（それ以外の名前は 404）。`dl=1` で `Content-Disposition: attachment`（元のファイル名） |
+| GET | `/gallery?since=N` | - | このセッションに画面へ出た画像・動画の一覧 `{epoch, last, items:[{id, t, kind, name, orig, size, who}]}`（`kind` = image / video）。起動ごとに空から |
+| GET | `/media/<name>` | `?dl=1` で保存 | `/gallery` に載っている画像・動画ファイル本体（それ以外の名前は 404）。`dl=1` で `Content-Disposition: attachment`（元のファイル名） |
 | GET | `/board?since=N&limit=500` | - | 画面の文字ログ。id が `N` より新しい行を返す `{epoch, last, mode, items:[{id, t, src, who, text, kind}]}`。`src` = `comment` / `marquee` / `clear`、`text` は装飾タグ付きの原文。`epoch` は起動ごとに変わる（再起動検知用） |
 | POST | `/name` | `{"name":"Alice"}` | 表示名保存 |
 | POST | `/upload?type=image|video|audio&filename=...` | raw binary | メディアアップロード |
@@ -582,7 +585,7 @@ comment_scroll_ms = 350    ; 新着時に上へ滑るアニメの時間
 comment_show_time = false  ; 行頭に時刻 (HH:MM) を付ける
 comment_spacing_pct = 40   ; 行間の詰め具合 (0..200)。100 = 旧来のゆったり、40 で約 2.5 倍詰まる
 text_log_max = 500         ; ブラウザ UI「画面の文字ログ」(GET /board) が遡れる行数 (10..5000)。メモリ上のみ
-upload_prune_max = 0       ; cache/uploads の古いファイル削除。0 = 消さない (既定)。N>0 で画像以外を N 件まで (画像は常に残す)
+upload_prune_max = 0       ; cache/uploads の古いファイル削除。0 = 消さない (既定)。N>0 で画像以外を N 件まで (画像と、このセッションの一覧に載った動画は残す)
 ;ai_token =                ; POST /ai の共有トークン。空なら LAN 内の誰でも AI 操作可
 ;ai_url =                  ; おわくさの制御口 (GET/PUT /prompt)。通常は空: POST /ai のヘッダ X-Poco-AI-Url で毎回名乗る
 ```

@@ -20,14 +20,16 @@ Endpoints:
                          the control window's システムプロンプト編集 dialog
                          talks to that URL (GET/PUT /prompt).
   GET  /ai/status        JSON: text mode, feed count, sizes, ai_url
-  GET  /gallery?since=N  JSON: pictures shown in THIS session (uploaded
-                         photos + AI-generated images), newest last —
-                         {epoch, last, items:[{id, t, name, orig, size,
-                         who}]}.  Starts empty on every process start;
-                         the files themselves stay on disk.
-  GET  /media/<name>     the picture file itself (only names listed by
-                         /gallery in this session); ?dl=1 forces a
-                         download (Content-Disposition: attachment)
+  GET  /gallery?since=N  JSON: pictures and videos shown in THIS session
+                         (uploaded photos / videos + AI-generated images
+                         / videos), newest last — {epoch, last, items:
+                         [{id, t, kind, name, orig, size, who}]}.  Starts
+                         empty on every process start; the files
+                         themselves stay on disk.
+  GET  /media/<name>     the picture / video file itself (only names
+                         listed by /gallery in this session); ?dl=1
+                         forces a download (Content-Disposition:
+                         attachment)
   GET  /board?since=N    JSON: everything the text board has shown (AI
                          comments / replies, viewer marquees, operator
                          lines) newer than entry id N — a scroll-back
@@ -333,7 +335,7 @@ class WebBridge(QObject):
                 "items": items,
             }
 
-    # ---- session picture gallery (GET /gallery, /media/<name>) ----
+    # ---- session picture / video gallery (GET /gallery, /media/<name>) ----
     def record_media(self, kind: str, path: str, orig: str, size: int,
                      who: str, cid: str) -> None:
         name = os.path.basename(path)
@@ -361,6 +363,12 @@ class WebBridge(QObject):
         with self._lock:
             e = self._gallery_by_name.get(name)
             return dict(e) if e else None
+
+    def gallery_paths(self) -> list[str]:
+        """Files listed in this session's gallery — kept out of the cache
+        prune so a listed video can still be downloaded later."""
+        with self._lock:
+            return [e["path"] for e in self._gallery]
 
     def is_piano_mode(self) -> bool:
         with self._lock:
@@ -1137,7 +1145,7 @@ class _Handler(BaseHTTPRequestHandler):
                 self._send_json(413, {"ok": False, "reason": "too_large_or_empty"},
                                 set_cookie=new_cookie)
                 return
-            if kind == "image":
+            if kind in ("image", "video"):
                 # Keep the sender's own file name (Japanese and all) for the
                 # gallery / download; the on-disk name stays ASCII-only.
                 orig = os.path.basename(raw_name.replace("\\", "/")).strip()[:120] or safe_name
@@ -1194,7 +1202,8 @@ class _Handler(BaseHTTPRequestHandler):
     # Old cache pruning.  Off by default (prune_max = 0, config
     # upload_prune_max): generated / uploaded pictures are kept so they can
     # be downloaded later.  With a positive limit only non-image files are
-    # pruned — pictures always stay.
+    # pruned — pictures always stay, and so does anything listed in this
+    # session's gallery (videos shown this session stay downloadable).
     def _prune_old_uploads(self, max_files: int = 0) -> None:
         if max_files <= 0:
             return
@@ -1204,6 +1213,10 @@ class _Handler(BaseHTTPRequestHandler):
                 protected = {os.path.abspath(p) for p in self.active_paths_cb() or []}
         except Exception:
             protected = set()
+        try:
+            protected |= {os.path.abspath(p) for p in self.bridge.gallery_paths()}
+        except Exception:
+            pass
         try:
             entries = [
                 (os.path.getmtime(os.path.join(self.upload_dir, n)),
