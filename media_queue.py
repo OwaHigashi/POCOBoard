@@ -20,7 +20,7 @@ import re
 import threading
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
 from PySide6.QtCore import QObject, Signal
@@ -41,6 +41,7 @@ class QueueItem:
     sender:    str        # e.g. "Alice (#abcd1234)"
     added_ms:  float
     cid:       str = ""   # uploader client_id (for per-user stop/cancel)
+    note:      dict = field(default_factory=dict)   # how an AI picture was made (see WebBridge.record_media)
 
 
 def _remove_unless_picture(it: "QueueItem") -> None:
@@ -76,7 +77,7 @@ class MediaQueue(QObject):
 
     # ---------- inbound ----------
     def enqueue(self, kind: str, path: str, sender: str,
-                cid: str = "") -> QueueItem:
+                cid: str = "", note: Optional[dict] = None) -> QueueItem:
         try:
             size = os.path.getsize(path)
         except OSError:
@@ -93,6 +94,7 @@ class MediaQueue(QObject):
             sender=sender or "?",
             added_ms=time.time() * 1000,
             cid=cid or "",
+            note=dict(note or {}),
         )
         with self._lock:
             self._items.append(item)

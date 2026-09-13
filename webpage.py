@@ -434,6 +434,29 @@ INDEX_HTML = r"""<!doctype html>
     text-decoration: none;
   }
   .gi .acts a.dl { background: #edf4f1; border-color: #bfd0c8; font-weight: 600; }
+  .gi .acts a.note { background: #f3eef8; border-color: #cbbcdc; flex: 0 0 auto; padding-left: 8px; padding-right: 8px; }
+  .note-box {
+    position: fixed; inset: 0; z-index: 60;
+    background: rgba(20, 16, 12, .55);
+    display: flex; align-items: center; justify-content: center;
+    padding: 16px;
+  }
+  .note-card {
+    background: #fffdfa; color: var(--text);
+    border: 1px solid var(--line-strong); border-radius: 16px;
+    width: min(760px, 100%); max-height: 88vh;
+    display: flex; flex-direction: column;
+    box-shadow: 0 18px 50px rgba(0,0,0,.35);
+  }
+  .note-head { display: flex; align-items: center; gap: 8px; padding: 12px 14px; border-bottom: 1px solid var(--line); }
+  .note-head .spacer { flex: 1; }
+  .note-head button { font-size: 13px; padding: 6px 12px; }
+  #noteBody { overflow: auto; padding: 12px 14px; font-size: 13px; line-height: 1.5; }
+  .note-row { margin: 0 0 10px; }
+  .note-row .k { display: block; font-size: 11px; color: var(--muted); font-weight: 600; letter-spacing: .3px; }
+  .note-row .v { white-space: pre-wrap; word-break: break-word; }
+  .note-row pre { margin: 4px 0 0; padding: 8px 10px; background: #f6f1ea; border: 1px solid var(--line); border-radius: 10px;
+                  font-size: 12px; line-height: 1.45; white-space: pre-wrap; word-break: break-word; max-height: 40vh; overflow: auto; }
   .board-new {
     position: sticky;
     bottom: 6px;
@@ -815,17 +838,22 @@ INDEX_HTML = r"""<!doctype html>
     <div id="galleryGrid"></div>
     <div style="font-size:12px; opacity:.75;">
       ※ このセッション (POCOBoard 起動後) に画面へ出た写真・動画・生成画像・生成動画。新しいものが先頭。「保存」でダウンロードできます。
+      おわくさが作ったものには「📝 指令」が付き、誰のどんな依頼で・生成モデルにどんな指令を渡して作ったかを見られます。
       動画のサムネイルは画面で再生されたときに付きます。Pococha のアプリ内ブラウザでは保存できないので、上の「Safari / Chrome で開く」で外部ブラウザに切り替えてから保存してください。
     </div>
   </div>
 </main>
-  <div class="lb-name" id="lbName"></div>
-  <div class="lb-hint" id="lbHint"></div>
-  <div class="lb-acts">
-    <button id="lbShare" class="primary" hidden>📤 共有 / 写真に保存</button>
-    <a id="lbDl" class="primary" href="#" download>⬇ ダウンロード</a>
-    <a id="lbOpen" href="#" target="_blank" rel="noopener">別タブで開く</a>
-    <button id="lbClose">閉じる</button>
+
+<!-- 📝 指令: どんな指令で生成された画像・動画か (おわくさが POST /upload ?note= で添える) -->
+<div id="noteBox" class="note-box" hidden>
+  <div class="note-card" role="dialog" aria-modal="true" aria-labelledby="noteTitle">
+    <div class="note-head">
+      <strong id="noteTitle">📝 生成の指令</strong>
+      <span class="spacer"></span>
+      <button id="noteCopy">コピー</button>
+      <button id="noteClose">閉じる</button>
+    </div>
+    <div id="noteBody"></div>
   </div>
 </div>
 
@@ -1582,11 +1610,79 @@ function galleryRender(e) {
     '<div class="meta" title="' + escHtml(fname) + '"><b>' + escHtml(e.t || '') + '</b> ' + escHtml(e.who || '') + '</div>' +
     '<div class="meta">' + escHtml(fname) + ' · ' + fmtKB(e.size || 0) + '</div>' +
     '<div class="acts"><a href="' + src + '" target="_blank" rel="noopener">開く</a>' +
-    '<a class="dl" href="' + dl + '" download="' + escHtml(fname) + '">⬇ 保存</a></div>';
+    '<a class="dl" href="' + dl + '" download="' + escHtml(fname) + '">⬇ 保存</a>' +
+    (e.note ? '<a class="note" href="#" title="' + escHtml(noteBrief(e.note)) + '">📝 指令</a>' : '') + '</div>';
   if (!video) card.querySelector('img').src = src;
+  if (e.note) card.querySelector('a.note').onclick = (ev) => { ev.preventDefault(); showNote(e); };
   galleryCards[e.name] = card;
   return card;
 }
+
+// ---- 📝 指令: どんな指令で生成されたか (おわくさが /upload に ?note= で添える。無い項目は出さない) ----
+const NOTE_FIELDS = [
+  ['who', '依頼者'], ['request', '視聴者の依頼 (原文)'], ['subject', 'お題'], ['prev', '引き継いだ前の絵・動画'],
+  ['prompt_en', '英訳 (会話 AI が作成)'], ['text', '画像に入れる文字'], ['caption', '生成モデルへ渡した指令'],
+  ['model', 'モデル'], ['blocked', '安全フィルタで再試行した回数'], ['sec', '所要秒'],
+];
+function noteBrief(n) {
+  return (n.request || n.subject || n.caption || n.text || '').toString().slice(0, 200);
+}
+function notePretty(v) {
+  // JSON キャプション (Ideogram 4) は読みやすく整形。それ以外はそのまま
+  const t = String(v).trim();
+  if (t[0] === '{' || t[0] === '[') { try { return JSON.stringify(JSON.parse(t), null, 1); } catch (_) {} }
+  return t;
+}
+function noteText(e) {
+  const n = e.note || {};
+  const out = [];
+  if (e.t) out.push('時刻: ' + e.t);
+  if (e.orig || e.name) out.push('ファイル: ' + (e.orig || e.name));
+  for (const [k, label] of NOTE_FIELDS) {
+    const v = n[k];
+    if (v === undefined || v === null || v === '' || v === 0 || v === false) continue;
+    out.push(label + ': ' + notePretty(v));
+  }
+  for (const k in n) {
+    if (NOTE_FIELDS.some(f => f[0] === k) || k === 'kind' || k === 'file') continue;
+    if (n[k] !== undefined && n[k] !== null && n[k] !== '') out.push(k + ': ' + n[k]);
+  }
+  return out.join('\n');
+}
+const noteBox = document.getElementById('noteBox');
+const noteBody = document.getElementById('noteBody');
+let noteCurrent = null;
+function showNote(e) {
+  const n = e.note || {};
+  noteCurrent = e;
+  let html = '<div class="note-row"><span class="k">時刻 / ファイル</span><span class="v">' +
+             escHtml((e.t || '') + '  ' + (e.orig || e.name || '')) + '</span></div>';
+  for (const [k, label] of NOTE_FIELDS) {
+    const v = n[k];
+    if (v === undefined || v === null || v === '' || v === 0 || v === false) continue;
+    const pretty = notePretty(v);
+    html += '<div class="note-row"><span class="k">' + escHtml(label) + '</span>' +
+            (k === 'caption' ? '<pre>' + escHtml(pretty) + '</pre>' : '<span class="v">' + escHtml(pretty) + '</span>') + '</div>';
+  }
+  for (const k in n) {
+    if (NOTE_FIELDS.some(f => f[0] === k) || k === 'kind' || k === 'file') continue;
+    if (n[k] === undefined || n[k] === null || n[k] === '') continue;
+    html += '<div class="note-row"><span class="k">' + escHtml(k) + '</span><span class="v">' + escHtml(String(n[k])) + '</span></div>';
+  }
+  noteBody.innerHTML = html;
+  noteBox.hidden = false;
+  noteBody.scrollTop = 0;
+}
+function hideNote() { noteBox.hidden = true; noteCurrent = null; }
+document.getElementById('noteClose').onclick = hideNote;
+noteBox.addEventListener('click', (ev) => { if (ev.target === noteBox) hideNote(); });
+document.addEventListener('keydown', (ev) => { if (ev.key === 'Escape' && !noteBox.hidden) hideNote(); });
+document.getElementById('noteCopy').onclick = (ev) => {
+  if (!noteCurrent) return;
+  const ok = copyText(noteText(noteCurrent));
+  ev.target.textContent = ok ? 'コピーしました' : 'コピーできません';
+  setTimeout(() => { ev.target.textContent = 'コピー'; }, 1500);
+};
 function applyPosters(map) {
   for (const name in (map || {})) {
     const card = galleryCards[name];

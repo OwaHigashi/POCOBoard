@@ -339,6 +339,27 @@ _STANDALONE_TAGS = {"ue", "shita", "top", "bottom", "naka", "middle"}
 # ============================================================
 #  User list row
 # ============================================================
+def _note_text(note: dict) -> str:
+    """Generation record of an AI picture / clip (from おわくさ's POST
+    /upload ?note=...) as readable lines — hover text of the queue row."""
+    labels = (("who", "依頼者"), ("request", "依頼"), ("subject", "お題"), ("prev", "引き継いだ絵"),
+              ("prompt_en", "英訳"), ("text", "画像内の文字"), ("caption", "モデルへの指令"),
+              ("model", "モデル"), ("blocked", "フィルタ再試行"), ("sec", "所要秒"))
+    out = []
+    for key, label in labels:
+        v = note.get(key)
+        if v in (None, "", 0, False):
+            continue
+        v = str(v)
+        if len(v) > 600:
+            v = v[:600] + "…"
+        out.append(f"{label}: {v}")
+    for k, v in note.items():
+        if k not in dict(labels) and k not in ("kind", "file") and v not in (None, ""):
+            out.append(f"{k}: {str(v)[:600]}")
+    return "\n".join(out)
+
+
 class _QueueRow(QWidget):
     """One queued-media row: icon + metadata + [再生] / [削除] buttons."""
 
@@ -376,7 +397,7 @@ class _QueueRow(QWidget):
         lbl = QLabel(f"{item.filename}   ({size_txt})  —  {item.sender}")
         lbl.setObjectName("queueMeta")
         lbl.setStyleSheet("font-family:'Segoe UI Variable Text'; font-size:13px;")
-        lbl.setToolTip(item.path)
+        lbl.setToolTip(item.path + (("\n\n" + _note_text(item.note)) if item.note else ""))
         row.addWidget(lbl, 1)
 
         # Play + delete buttons
@@ -2497,7 +2518,13 @@ class ControlWindow(QWidget):
     def on_media_uploaded(self, cid: str, label: str, ip: str,
                           kind: str, path: str) -> None:
         """Entry point for remote media arrivals (wired in pocoboard.py)."""
-        item = self.queue.enqueue(kind, path, label, cid=cid)
+        note = None
+        try:
+            ent = self.bridge.gallery_lookup(os.path.basename(path))
+            note = (ent or {}).get("note")
+        except Exception:
+            note = None
+        item = self.queue.enqueue(kind, path, label, cid=cid, note=note)
         if self._autoplay:
             taken = self.queue.take(item.id)
             if taken is not None:

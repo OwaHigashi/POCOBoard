@@ -340,13 +340,18 @@ class WebBridge(QObject):
 
     # ---- session picture / video gallery (GET /gallery, /media/<name>) ----
     def record_media(self, kind: str, path: str, orig: str, size: int,
-                     who: str, cid: str) -> None:
+                     who: str, cid: str, note: Optional[dict] = None) -> None:
+        """`note` (optional) = how an AI-generated picture / clip was made
+        (who asked, the request, the prompt handed to the model, ...).  It
+        rides along in /gallery so the browser UI can show it (📝 指令)."""
         name = os.path.basename(path)
         with self._lock:
             self._gallery_seq += 1
             e = {"id": self._gallery_seq, "t": time.strftime("%H:%M:%S"),
                  "kind": kind, "name": name, "orig": orig, "size": int(size),
                  "who": who or "", "cid": cid or "", "path": path}
+            if note:
+                e["note"] = note
             self._gallery.append(e)
             self._gallery_by_name[name] = e
             if len(self._gallery) > 2000:
@@ -1172,7 +1177,11 @@ class _Handler(BaseHTTPRequestHandler):
                 # Keep the sender's own file name (Japanese and all) for the
                 # gallery / download; the on-disk name stays ASCII-only.
                 orig = os.path.basename(raw_name.replace("\\", "/")).strip()[:120] or safe_name
-                self.bridge.record_media(kind, dest, orig, written, label, cid)
+                # ?note=<JSON>: how the file was generated (おわくさ sends
+                # who / request / subject / caption ...).  Shown in the
+                # browser gallery as 📝 指令.  Untrusted: clamp keys / sizes.
+                note = self._parse_note(query.get("note", [""])[0])
+                self.bridge.record_media(kind, dest, orig, written, label, cid, note=note)
             self.bridge.mediaUploaded.emit(cid, label, ip, kind, dest)
             self.bridge.emit_log(
                 "UPLOAD",
@@ -1183,6 +1192,31 @@ class _Handler(BaseHTTPRequestHandler):
             return
 
         self._send_json(404, {"ok": False, "reason": "not_found"})
+
+    @staticmethod
+    def _parse_note(raw: str) -> Optional[dict]:
+        """`?note=` of POST /upload → dict of short strings / numbers, or None."""
+        raw = (raw or "").strip()
+        if not raw or len(raw) > 32000:
+            return None
+        try:
+            obj = json.loads(raw)
+        except ValueError:
+            return {"text": raw[:8000]}
+        if not isinstance(obj, dict):
+            return {"text": str(obj)[:8000]}
+        out: dict = {}
+        for k, v in list(obj.items())[:24]:
+            key = str(k)[:40]
+            if isinstance(v, bool) or v is None:
+                out[key] = v
+            elif isinstance(v, (int, float)):
+                out[key] = v
+            elif isinstance(v, str):
+                out[key] = v[:8000]
+            else:
+                out[key] = json.dumps(v, ensure_ascii=False)[:8000]
+        return out or None
 
     _MEDIA_TYPES = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
                     ".webp": "image/webp", ".gif": "image/gif", ".bmp": "image/bmp",
