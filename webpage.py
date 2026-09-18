@@ -441,6 +441,8 @@ INDEX_HTML = r"""<!doctype html>
     display: flex; align-items: center; justify-content: center;
     padding: 16px;
   }
+  /* hidden 属性を display:flex より優先させる (これが無いと常に全画面を覆い、下の UI が一切押せなくなる) */
+  .note-box[hidden] { display: none; }
   .note-card {
     background: #fffdfa; color: var(--text);
     border: 1px solid var(--line-strong); border-radius: 16px;
