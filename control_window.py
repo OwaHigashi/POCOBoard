@@ -1356,12 +1356,12 @@ class ControlWindow(QWidget):
         self.btnPrompt.setMinimumHeight(32)
         self.btnPrompt.clicked.connect(self._open_prompt_dialog)
         row3.addWidget(self.btnPrompt)
-        self.chkPococha = QCheckBox("💬 Pococha にもコメント投稿")
+        self.chkPococha = QCheckBox("💬 Pococha にもコメント投稿 (おわくさ側の既定 ON)")
         self.chkPococha.setToolTip(
-            "ON にすると、おわくさの返答 (視聴者への返事・時報・独り言) を chatora 上の Pococha のコメント欄にも投稿します\n"
-            "(KVM マウス + ADBKeyboard 経由。owakusa.ini [pococha])。ON の間は文字を打っていないとき画面中央を連打して箱を取ります。\n"
-            "おわくさが動いていて場所 (X-Poco-AI-Url) が分かっているときだけ切り替えられます。切替は owakusa 側に保存されます。")
-        self.chkPococha.setEnabled(False)
+            "おわくさの返答 (視聴者への返事・時報・独り言) を chatora 上の Pococha のコメント欄にも投稿します\n"
+            "(KVM マウス + ADBKeyboard 経由。owakusa.ini [pococha]、既定 ON)。ON の間は文字を打っていないとき画面中央を連打して箱を取ります。\n"
+            "おわくさが POST /ai を送ってくると実際の状態に同期します。それまでの表示は仮です。切替は owakusa 側に保存されます。")
+        self.chkPococha.setChecked(True)      # おわくさ側の既定は ON。場所が分かった時点で実際の状態に同期する
         self.chkPococha.setMinimumHeight(32)
         self._pococha_syncing = False
         self.chkPococha.toggled.connect(self._on_pococha_toggled)
@@ -1404,10 +1404,10 @@ class ControlWindow(QWidget):
         self._pococha_syncing = True
         try:
             if not res:
-                self.chkPococha.setEnabled(False)
                 return
             avail = bool(res.get("pococha_available"))
             self.chkPococha.setEnabled(avail)
+            self.chkPococha.setText("💬 Pococha にもコメント投稿" + ("" if avail else " (おわくさ側で無効)"))
             self.chkPococha.setChecked(bool(res.get("pococha_comment")))
             stats = res.get("pococha_stats") or {}
             if not avail:
@@ -1424,7 +1424,8 @@ class ControlWindow(QWidget):
         if self._pococha_syncing:
             return
         if not self._prompt_dialog_lazy().set_pococha(on):
-            self._log_local("AI/PROMPT", "✖ Pococha 投稿の切替を送れません (おわくさの場所が不明か処理中)")
+            self._log_local("AI/PROMPT", "✖ Pococha 投稿の切替を送れません (おわくさがまだ POST /ai を送ってきていない、または処理中)。"
+                                         " おわくさを起動すると自動で同期します")
             self._pococha_syncing = True
             try:
                 self.chkPococha.setChecked(not on)
