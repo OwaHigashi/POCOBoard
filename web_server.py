@@ -122,6 +122,8 @@ class WebBridge(QObject):
     aiRequested      = Signal(str, str, str, object)
     # pre-formatted log line
     requestLogged    = Signal(str, str)
+    # おわくさの制御口 (X-Poco-AI-Url) が分かった / 変わった → (url)
+    aiUrlChanged     = Signal(str)
     # emitted whenever the client registry or any blocked flag changes
     clientsChanged   = Signal()
 
@@ -259,7 +261,10 @@ class WebBridge(QObject):
         if len(url) > 200:
             return
         with self._lock:
+            changed = (url != self._ai_url)
             self._ai_url = url
+        if changed and url:
+            self.aiUrlChanged.emit(url)
 
     def ai_url(self) -> str:
         with self._lock:

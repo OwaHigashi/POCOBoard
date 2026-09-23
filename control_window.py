@@ -523,10 +523,11 @@ class PromptDialog(QDialog):
     _done = Signal(str, object)     # (op, dict | str error)
     _TIMEOUT = 8.0
 
-    def __init__(self, parent: QWidget, bridge: WebBridge, log_cb) -> None:
+    def __init__(self, parent: QWidget, bridge: WebBridge, log_cb, on_state=None) -> None:
         super().__init__(parent)
         self._bridge = bridge
         self._log = log_cb
+        self._on_state = on_state      # 取得/設定のたびに応答 (dict) を親に渡す (Pococha 投稿チェックの同期用)
         self._busy = False
         self._loaded_prompt: str | None = None
         self.setWindowTitle("🧠 おわくさ システムプロンプト編集")
@@ -740,6 +741,20 @@ class PromptDialog(QDialog):
     def reset(self) -> None:
         self._request("reset", "PUT", "/prompt", {"reset": True, "save": self.chkSave.isChecked()})
 
+    def set_pococha(self, on: bool) -> bool:
+        """「Pococha にコメント投稿」の切替だけを送る (人格・名前は触らない)。送れなければ False。"""
+        if self._busy or not self._url():
+            return False
+        self._request("pococha", "PUT", "/prompt", {"pococha_comment": bool(on), "save": True})
+        return True
+
+    def refresh_state(self) -> bool:
+        """表示せずに GET /prompt だけ (チェックボックスの初期同期用)。"""
+        if self._busy or not self._url():
+            return False
+        self._request("get", "GET", "/prompt")
+        return True
+
     def _request(self, op: str, method: str, path: str, payload: dict | None = None) -> None:
         if self._busy:
             return
@@ -748,7 +763,8 @@ class PromptDialog(QDialog):
             self._set_status("おわくさの場所 (URL) が分かりません。owakusa.py を起動すると自動で入ります。", error=True)
             return
         self._set_busy(True)
-        self._set_status({"get": "取得中…", "set": "設定中…", "reset": "既定に戻しています…"}[op])
+        self._set_status({"get": "取得中…", "set": "設定中…", "reset": "既定に戻しています…",
+                          "pococha": "Pococha 投稿の切替中…"}[op])
         headers = {"Content-Type": "application/json; charset=utf-8"}
         tok = self._bridge.ai_token()
         if tok:
@@ -784,7 +800,11 @@ class PromptDialog(QDialog):
                 hint = "  (owakusa.py が動いているか、URL / Windows Firewall を確認)"
             self._set_status(f"✖ {'取得' if op == 'get' else '設定'}に失敗: {why}{hint}", error=True)
             self._log("AI/PROMPT", f"✖ {op} failed: {why}")
+            if self._on_state:
+                self._on_state(None)
             return
+        if self._on_state:
+            self._on_state(res)
         prompt = res.get("prompt", "")
         src = {"builtin": "内蔵既定", "file": "ファイル", "runtime": "編集済み (今回のみ)"}.get(res.get("source"), res.get("source"))
         self.editor.setPlainText(prompt)
@@ -800,8 +820,13 @@ class PromptDialog(QDialog):
             f"{res.get('name', 'おわくさ')} / モデル {res.get('model', '?')} / いまの人格プロンプト: {src} / "
             f"{len(prompt)} 文字 / 返答 {res.get('reply_chars', '?')} 文字前後 (上限 {res.get('reply_max', '?')}) / "
             f"質問の答え {res.get('answer_chars', '?')} 文字"
-            + (f" / キャラ指定中: {res['style']}" if res.get("style") else ""))
-        if op == "get":
+            + (f" / キャラ指定中: {res['style']}" if res.get("style") else "")
+            + (" / Pococha 投稿 ON" if res.get("pococha_comment") else ""))
+        if op == "pococha":
+            on = bool(res.get("pococha_comment"))
+            self._set_status(f"✔ Pococha へのコメント投稿を {'ON' if on else 'OFF'} にしました。")
+            self._log("AI/PROMPT", f"POCOCHA {'on' if on else 'off'}")
+        elif op == "get":
             self._set_status("✔ 取得しました。書き換えて「設定」で反映します。")
             self._log("AI/PROMPT", f"GET  {len(prompt)} 文字 ({res.get('source')})")
         elif op == "set":
@@ -1331,8 +1356,26 @@ class ControlWindow(QWidget):
         self.btnPrompt.setMinimumHeight(32)
         self.btnPrompt.clicked.connect(self._open_prompt_dialog)
         row3.addWidget(self.btnPrompt)
+        self.chkPococha = QCheckBox("💬 Pococha にもコメント投稿")
+        self.chkPococha.setToolTip(
+            "ON にすると、おわくさの返答 (視聴者への返事・時報・独り言) を chatora 上の Pococha のコメント欄にも投稿します\n"
+            "(KVM マウス + ADBKeyboard 経由。owakusa.ini [pococha])。ON の間は文字を打っていないとき画面中央を連打して箱を取ります。\n"
+            "おわくさが動いていて場所 (X-Poco-AI-Url) が分かっているときだけ切り替えられます。切替は owakusa 側に保存されます。")
+        self.chkPococha.setEnabled(False)
+        self.chkPococha.setMinimumHeight(32)
+        self._pococha_syncing = False
+        self.chkPococha.toggled.connect(self._on_pococha_toggled)
+        row3.addWidget(self.chkPococha)
+        self.btnPocochaSync = QPushButton("🔄")
+        self.btnPocochaSync.setToolTip("おわくさから「Pococha にもコメント投稿」の現在の状態を取得し直します (GET /prompt)。")
+        self.btnPocochaSync.setFixedWidth(40)
+        self.btnPocochaSync.setMinimumHeight(32)
+        self.btnPocochaSync.clicked.connect(lambda: self._prompt_dialog_lazy().refresh_state())
+        row3.addWidget(self.btnPocochaSync)
         row3.addStretch(1)
         g.addLayout(row3, 3, 0, 1, 4)
+        # おわくさが最初の POST /ai で場所を名乗ったら、チェックの状態を取りに行く
+        self.bridge.aiUrlChanged.connect(self._on_ai_url_changed)
 
         note = QLabel(
             "おわくさ (whitewhale の scripts/owakusa.py) は HTTP の POST /ai でこの画面を操作します: "
@@ -1345,11 +1388,51 @@ class ControlWindow(QWidget):
         self._refresh_text_mode_ui()
         return box
 
-    def _open_prompt_dialog(self) -> None:
+    def _prompt_dialog_lazy(self) -> "PromptDialog":
         dlg = getattr(self, "_prompt_dialog", None)
         if dlg is None:
-            dlg = PromptDialog(self, self.bridge, self._log_local)
+            dlg = PromptDialog(self, self.bridge, self._log_local, on_state=self._on_ai_state)
             self._prompt_dialog = dlg
+        return dlg
+
+    @Slot(str)
+    def _on_ai_url_changed(self, url: str) -> None:
+        self._prompt_dialog_lazy().refresh_state()
+
+    def _on_ai_state(self, res: dict | None) -> None:
+        """おわくさの応答 (GET/PUT /prompt) から「Pococha にもコメント投稿」チェックを同期する。"""
+        self._pococha_syncing = True
+        try:
+            if not res:
+                self.chkPococha.setEnabled(False)
+                return
+            avail = bool(res.get("pococha_available"))
+            self.chkPococha.setEnabled(avail)
+            self.chkPococha.setChecked(bool(res.get("pococha_comment")))
+            stats = res.get("pococha_stats") or {}
+            if not avail:
+                self.chkPococha.setToolTip("おわくさ側で [pococha] enabled = false (または --no-pococha) なので使えません。")
+            elif stats:
+                self.chkPococha.setToolTip(
+                    f"投稿 {stats.get('posted', 0)} 件 / 捨てた {stats.get('dropped', 0)} 件 / 待ち {stats.get('queued', 0)} 件"
+                    f" / 中央連打 {'中' if stats.get('tapping') else '停止'}"
+                    + (f"\n最後のエラー: {stats['last_error']}" if stats.get("last_error") else ""))
+        finally:
+            self._pococha_syncing = False
+
+    def _on_pococha_toggled(self, on: bool) -> None:
+        if self._pococha_syncing:
+            return
+        if not self._prompt_dialog_lazy().set_pococha(on):
+            self._log_local("AI/PROMPT", "✖ Pococha 投稿の切替を送れません (おわくさの場所が不明か処理中)")
+            self._pococha_syncing = True
+            try:
+                self.chkPococha.setChecked(not on)
+            finally:
+                self._pococha_syncing = False
+
+    def _open_prompt_dialog(self) -> None:
+        dlg = self._prompt_dialog_lazy()
         dlg.show()
         dlg.raise_()
         dlg.activateWindow()
