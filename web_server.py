@@ -23,12 +23,18 @@ Endpoints:
   GET  /gallery?since=N  JSON: pictures and videos shown in THIS session
                          (uploaded photos / videos + AI-generated images
                          / videos), newest last — {epoch, last, items:
-                         [{id, t, kind, name, orig, size, who, poster?}],
-                         posters:{video name: poster name}}.  poster = a
-                         JPEG of the clip's first frame (written when the
-                         clip first plays on the display).  Starts empty
-                         on every process start; the files themselves
-                         stay on disk.
+                         [{id, no, day, t, kind, name, orig, size, who,
+                         poster?, note?}], posters:{video name: poster
+                         name}}.  no = the day's running number (#1, #2,
+                         … restarts at 1 each day, survives a process
+                         restart via cache/gallery_no.json; shown as
+                         "#N" in the browser gallery so viewers can say
+                         「3 番の写真の背景を海にして」 to the AI), day =
+                         YYYY-MM-DD it belongs to.  poster = a JPEG of
+                         the clip's first frame (written when the clip
+                         first plays on the display).  Starts empty on
+                         every process start; the files themselves stay
+                         on disk.
   GET  /media/<name>     the picture / video file itself (only names
                          listed by /gallery in this session); ?dl=1
                          forces a download (Content-Disposition:
@@ -43,6 +49,9 @@ Endpoints:
                          ?type=image|video|audio&filename=foo.jpg
                          Content-Type: the file's MIME type
                          Body: raw binary bytes
+                         → {ok, size, name, no, day} for image / video
+                         (name = the /media/<name> name, no / day = the
+                         gallery number the file got)
 
 Every request is identified by a `poco_client` cookie (16-hex random string
 set on first visit).  Per-client `blocked` flag gates FX / marquee / talk /
@@ -165,6 +174,12 @@ class WebBridge(QObject):
         self._gallery: list[dict] = []
         self._gallery_by_name: dict[str, dict] = {}
         self._gallery_seq = 0
+        # Day-scoped running number for gallery items (#1, #2, … per day),
+        # persisted in `number_file` so a restart during the stream keeps
+        # counting instead of handing out #1 again.
+        self._gallery_day = ""
+        self._gallery_no = 0
+        self._number_file = ""
         # Known clients — client_id -> {name, last_seen_ms, ip, blocked}
         self._clients: dict[str, dict] = {}
         # IPs blocked outright (operator action).  Checked alongside the
@@ -344,15 +359,46 @@ class WebBridge(QObject):
             }
 
     # ---- session picture / video gallery (GET /gallery, /media/<name>) ----
+    def set_number_file(self, path: str) -> None:
+        """Where the day's running number is remembered across restarts
+        ({"day": "YYYY-MM-DD", "no": N}).  Unreadable / missing = start at 1."""
+        self._number_file = path or ""
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                d = json.load(f)
+            if isinstance(d, dict) and d.get("day") == time.strftime("%Y-%m-%d"):
+                self._gallery_day = str(d["day"])
+                self._gallery_no = max(0, int(d.get("no") or 0))
+        except (OSError, ValueError, TypeError):
+            pass
+
+    def _next_number(self) -> tuple[int, str]:
+        """Allocate the next day number (caller holds self._lock)."""
+        day = time.strftime("%Y-%m-%d")
+        if day != self._gallery_day:
+            self._gallery_day, self._gallery_no = day, 0
+        self._gallery_no += 1
+        if self._number_file:
+            try:
+                tmp = self._number_file + ".tmp"
+                with open(tmp, "w", encoding="utf-8") as f:
+                    json.dump({"day": day, "no": self._gallery_no}, f)
+                os.replace(tmp, self._number_file)
+            except OSError:
+                pass
+        return self._gallery_no, day
+
     def record_media(self, kind: str, path: str, orig: str, size: int,
-                     who: str, cid: str, note: Optional[dict] = None) -> None:
+                     who: str, cid: str, note: Optional[dict] = None) -> dict:
         """`note` (optional) = how an AI-generated picture / clip was made
         (who asked, the request, the prompt handed to the model, ...).  It
-        rides along in /gallery so the browser UI can show it (📝 指令)."""
+        rides along in /gallery so the browser UI can show it (📝 指令).
+        Returns {name, no, day} — the day number the item got."""
         name = os.path.basename(path)
         with self._lock:
             self._gallery_seq += 1
-            e = {"id": self._gallery_seq, "t": time.strftime("%H:%M:%S"),
+            no, day = self._next_number()
+            e = {"id": self._gallery_seq, "no": no, "day": day, "t": time.strftime("%H:%M:%S"),
                  "kind": kind, "name": name, "orig": orig, "size": int(size),
                  "who": who or "", "cid": cid or "", "path": path}
             if note:
@@ -362,6 +408,7 @@ class WebBridge(QObject):
             if len(self._gallery) > 2000:
                 old = self._gallery.pop(0)
                 self._gallery_by_name.pop(old["name"], None)
+        return {"name": name, "no": no, "day": day}
 
     def gallery_since(self, since: int, limit: int = 500) -> dict:
         with self._lock:
@@ -1178,6 +1225,7 @@ class _Handler(BaseHTTPRequestHandler):
                 self._send_json(413, {"ok": False, "reason": "too_large_or_empty"},
                                 set_cookie=new_cookie)
                 return
+            reply: dict = {"ok": True, "size": written}
             if kind in ("image", "video"):
                 # Keep the sender's own file name (Japanese and all) for the
                 # gallery / download; the on-disk name stays ASCII-only.
@@ -1186,13 +1234,16 @@ class _Handler(BaseHTTPRequestHandler):
                 # who / request / subject / caption ...).  Shown in the
                 # browser gallery as 📝 指令.  Untrusted: clamp keys / sizes.
                 note = self._parse_note(query.get("note", [""])[0])
-                self.bridge.record_media(kind, dest, orig, written, label, cid, note=note)
+                # The day number goes back to the sender (おわくさ remembers
+                # its own pictures by it: 「3 番の絵を…」).
+                reply.update(self.bridge.record_media(kind, dest, orig, written, label, cid, note=note))
             self.bridge.mediaUploaded.emit(cid, label, ip, kind, dest)
             self.bridge.emit_log(
                 "UPLOAD",
-                f"{now_hms}  {label:24s}  UPLOAD    {kind:<5s} {written//1024} KB  {safe_name}",
+                f"{now_hms}  {label:24s}  UPLOAD    {kind:<5s} {written//1024} KB  {safe_name}"
+                + (f"  #{reply['no']}" if reply.get("no") else ""),
             )
-            self._send_json(200, {"ok": True, "size": written}, set_cookie=new_cookie)
+            self._send_json(200, reply, set_cookie=new_cookie)
             self._prune_old_uploads(self.prune_max)
             return
 

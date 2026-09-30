@@ -314,6 +314,10 @@ http://192.168.1.23:8080/
 - 画像・動画一覧
   - このセッション（POCOBoard 起動後）に画面へ出た写真・動画・おわくさの生成画像・生成動画がサムネイルで
     並びます（新しいものが先頭）。「開く」で原寸表示（動画はブラウザで再生）、「保存」でダウンロードできます。
+  - 各サムネイルの右上（と時刻の前）に **その日の通し番号 `#3`** が出ます。おわくさに「おわくさ、3 番の写真の背景を
+    海にして」「#3 を水彩画にして」と番号で指せます（視聴者が送った写真も、おわくさが作った絵も同じ番号列）。
+    番号は POCOBoard が `/upload` のたびに振り、日付が変わると 1 から。`cache/gallery_no.json` に覚えるので、配信中に
+    POCOBoard を起動し直しても続きの番号になります。
   - おわくさが生成したものには「📝 指令」ボタンが付き、ポップアップで「誰の・どんな依頼（コメント原文）で、お題を
     どう英訳し、生成モデル（Ideogram 4 / LTX-2）にどんな指令を渡して作ったか」（安全フィルタの再試行回数・所要秒も）を
     見られます。「コピー」でその内容をクリップボードへ。おわくさが `POST /upload` に `?note=<JSON>` で添えたもので、
@@ -432,11 +436,11 @@ http://<IP>:<port>/
 | POST | `/marquee/stop` | - | 横スクロール停止 |
 | POST | `/ai` | JSON（下記） | おわくさ AI の画面操作。`X-Poco-AI-Token` ヘッダ（`ai_token` 設定時） |
 | GET | `/ai/status` | - | `{mode, comment:{count,size_pct}, marquee:{used,size_pct}, last_ai_ms, ai_url}` |
-| GET | `/gallery?since=N` | - | このセッションに画面へ出た画像・動画の一覧 `{epoch, last, items:[{id, t, kind, name, orig, size, who, poster?, note?}], posters:{動画名: ポスター名}}`（`kind` = image / video。`poster` は再生時に作る先頭フレームの JPEG。`note` は `/upload` の `note` をそのまま：おわくさの生成記録 `{who, request, subject, prompt_en, text, caption, model, blocked, sec, prev?}`）。起動ごとに空から |
+| GET | `/gallery?since=N` | - | このセッションに画面へ出た画像・動画の一覧 `{epoch, last, items:[{id, no, day, t, kind, name, orig, size, who, poster?, note?}], posters:{動画名: ポスター名}}`（`no` = その日の通し番号（#1, #2, …。日付 `day` が変わると 1 から。`cache/gallery_no.json` に残る）、`kind` = image / video。`poster` は再生時に作る先頭フレームの JPEG。`note` は `/upload` の `note` をそのまま：おわくさの生成記録 `{who, request, subject, prompt_en, text, caption, model, blocked, sec, prev?, edit?}`）。起動ごとに空から。おわくさは 5 秒ごとにこれを見て視聴者の写真を知る |
 | GET | `/media/<name>` | `?dl=1` で保存 | `/gallery` に載っている画像・動画ファイル本体（それ以外の名前は 404）。`dl=1` で `Content-Disposition: attachment`（元のファイル名） |
 | GET | `/board?since=N&limit=500` | - | 画面の文字ログ。id が `N` より新しい行を返す `{epoch, last, mode, items:[{id, t, src, who, text, kind}]}`。`src` = `comment` / `marquee` / `clear`、`text` は装飾タグ付きの原文。`epoch` は起動ごとに変わる（再起動検知用） |
 | POST | `/name` | `{"name":"Alice"}` | 表示名保存 |
-| POST | `/upload?type=image|video|audio&filename=...&note=<JSON>` | raw binary | メディアアップロード。`note`（任意、URL エンコードした JSON オブジェクト、32 KB まで）は「どう生成したか」の記録で、`/gallery` の `note` と制御画面キューのツールチップに出る（値は 8000 文字で切る） |
+| POST | `/upload?type=image|video|audio&filename=...&note=<JSON>` | raw binary | メディアアップロード → `{ok, size, name, no, day}`（image / video のとき `name` = `/media/<name>` の名前、`no` / `day` = 一覧で付いた通し番号）。`note`（任意、URL エンコードした JSON オブジェクト、32 KB まで）は「どう生成したか」の記録で、`/gallery` の `note` と制御画面キューのツールチップに出る（値は 8000 文字で切る） |
 | POST | `/my/stop?kind=image|video|audio|all` | - | 自分のメディアだけ止める |
 
 ### 主なエラー

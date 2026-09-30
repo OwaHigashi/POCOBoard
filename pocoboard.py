@@ -405,6 +405,8 @@ def main() -> int:
     # ----- HTTP server -----
     upload_dir = os.path.join(here, "cache", "uploads")
     os.makedirs(upload_dir, exist_ok=True)
+    # Day numbers of gallery items (#1, #2, …) survive a restart mid-stream.
+    bridge.set_number_file(os.path.join(here, "cache", "gallery_no.json"))
     try:
         srv, srv_thread = run_in_thread(
             host, port, bridge, upload_dir, active_paths_cb=media_queue.protected_paths,

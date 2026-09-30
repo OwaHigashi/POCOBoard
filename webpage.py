@@ -413,6 +413,20 @@ INDEX_HTML = r"""<!doctype html>
     background: rgba(0,0,0,.6);
     color: #fff;
   }
+  /* その日の通し番号 (#3)。「おわくさ、3 番の写真の背景を海にして」と指せる */
+  .gi a.thumb .num {
+    position: absolute;
+    right: 6px;
+    top: 6px;
+    font-size: 13px;
+    font-weight: 700;
+    padding: 2px 8px;
+    border-radius: 8px;
+    background: rgba(255,255,255,.88);
+    color: #3b2f22;
+    border: 1px solid rgba(0,0,0,.15);
+  }
+  .gi .meta .num-txt { font-weight: 700; color: var(--text); }
   .gi .meta {
     font-size: 11px;
     color: var(--muted);
@@ -1606,10 +1620,13 @@ function galleryRender(e) {
   const dl  = src + '?dl=1';
   const fname = e.orig || e.name;
   const video = isVideoEntry(e);
-  const thumb = video ? posterHtml(e) + '<span class="badge">🎬 動画</span>' : '<img loading="lazy" alt="">';
+  // e.no = その日の通し番号 (POCOBoard が振る。おわくさに「3 番の写真を…」と頼むときの番号)
+  const num = e.no ? '<span class="num" title="その日の通し番号。「おわくさ、' + e.no + ' 番の写真の背景を海にして」のように指せます">#' + e.no + '</span>' : '';
+  const thumb = (video ? posterHtml(e) + '<span class="badge">🎬 動画</span>' : '<img loading="lazy" alt="">') + num;
   card.innerHTML =
     '<a class="thumb" href="' + src + '" target="_blank" rel="noopener">' + thumb + '</a>' +
-    '<div class="meta" title="' + escHtml(fname) + '"><b>' + escHtml(e.t || '') + '</b> ' + escHtml(e.who || '') + '</div>' +
+    '<div class="meta" title="' + escHtml(fname) + '">' + (e.no ? '<span class="num-txt">#' + e.no + '</span> ' : '') +
+    '<b>' + escHtml(e.t || '') + '</b> ' + escHtml(e.who || '') + '</div>' +
     '<div class="meta">' + escHtml(fname) + ' · ' + fmtKB(e.size || 0) + '</div>' +
     '<div class="acts"><a href="' + src + '" target="_blank" rel="noopener">開く</a>' +
     '<a class="dl" href="' + dl + '" download="' + escHtml(fname) + '">⬇ 保存</a>' +
@@ -1622,8 +1639,8 @@ function galleryRender(e) {
 
 // ---- 📝 指令: どんな指令で生成されたか (おわくさが /upload に ?note= で添える。無い項目は出さない) ----
 const NOTE_FIELDS = [
-  ['who', '依頼者'], ['request', '視聴者の依頼 (原文)'], ['subject', 'お題'], ['prev', '引き継いだ前の絵・動画'],
-  ['prompt_en', '英訳 (会話 AI が作成)'], ['text', '画像に入れる文字'], ['caption', '生成モデルへ渡した指令'],
+  ['who', '依頼者'], ['request', '視聴者の依頼 (原文)'], ['subject', 'お題'], ['prev', '引き継いだ前の絵・動画・写真'],
+  ['edit', '元画像の使い方'], ['prompt_en', '英訳 (会話 AI が作成)'], ['text', '画像に入れる文字'], ['caption', '生成モデルへ渡した指令'],
   ['model', 'モデル'], ['blocked', '安全フィルタで再試行した回数'], ['sec', '所要秒'],
 ];
 function noteBrief(n) {
@@ -1692,7 +1709,8 @@ function applyPosters(map) {
     const a = card.querySelector('a.thumb');
     if (!a) continue;
     card.dataset.poster = map[name];
-    a.innerHTML = posterHtml({ poster: map[name] }) + '<span class="badge">🎬 動画</span>';
+    const num = a.querySelector('.num');
+    a.innerHTML = posterHtml({ poster: map[name] }) + '<span class="badge">🎬 動画</span>' + (num ? num.outerHTML : '');
   }
 }
 async function refreshGallery() {
