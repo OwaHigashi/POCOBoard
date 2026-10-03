@@ -17,6 +17,7 @@ import os
 import signal
 import socket
 import sys
+import time
 
 from PySide6.QtCore    import Qt, QTimer, QLoggingCategory
 from PySide6.QtGui     import QFont, QGuiApplication, QIcon
@@ -394,6 +395,8 @@ def main() -> int:
     bridge.mediaUploaded.connect(ctrl.on_media_uploaded)
     # First decoded frame of each clip → gallery thumbnail.
     display.videoPosterReady.connect(bridge.set_video_poster)
+    # How each clip's playback went (frames delivered / stall recovery) → request log.
+    display.videoDiag.connect(lambda m: bridge.emit_log("VIDEO", time.strftime("%H:%M:%S") + "  VIDEO     " + m))
     # Per-user 取消 (browser-side) — the handler stops only items owned
     # by the requesting client.
     bridge.myStopRequested.connect(ctrl.on_my_stop)

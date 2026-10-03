@@ -61,6 +61,10 @@ class DisplayWindow(QWidget):
     # (video_path, poster_path) — a JPEG of the first decoded frame of a
     # clip, written next to it so the browser gallery can show a thumbnail.
     videoPosterReady = Signal(str, str)
+    # One line per clip about how playback went (frames delivered, stalls,
+    # recovery) — shown in the control window log so a clip that froze on
+    # its first frame can be told apart from one that played.
+    videoDiag = Signal(str)
     # Emitted whenever piano-roll mode toggles. `bool` = active.
     pianoModeChanged = Signal(bool)
     # (compact) — emitted whenever the piano-roll layout flips between
@@ -172,6 +176,10 @@ class DisplayWindow(QWidget):
         # Local file of the clip now playing whose poster JPEG is still to
         # be written (cleared once the first frame is saved).
         self._video_poster_pending: str = ""
+        # Playback health of the current clip (see _video_watchdog).
+        self._video_frames: int = 0
+        self._video_muted_retry: bool = False
+        self._video_watch_done: bool = False
         # Minimum playback duration (seconds).  If the natural clip length is
         # shorter than this, the player restarts from position 0 on each
         # end-of-media until the total elapsed playback meets the minimum.
@@ -1059,6 +1067,7 @@ class DisplayWindow(QWidget):
         if img is None or img.isNull():
             return
         self._latest_video_image = img
+        self._video_frames += 1
         # No explicit update() — _tick repaints on the next 16 ms tick
         # when it sees the dirty flag.
         self._frame_dirty = True
@@ -1189,6 +1198,13 @@ class DisplayWindow(QWidget):
         self._video_poster_pending = (
             path if os.path.isfile(path) and not os.path.isfile(path + ".poster.jpg") else "")
         self._video_start_ms = time.perf_counter_ns() / 1_000_000.0
+        self._video_frames = 0
+        self._video_muted_retry = False
+        self._video_watch_done = False
+        # A previous clip may have been replayed without sound (see
+        # _video_watchdog); every new clip starts with its audio again.
+        if self._video_player.audioOutput() is None and self._video_audio is not None:
+            self._video_player.setAudioOutput(self._video_audio)
         self._video_player.setSource(url)
         self._video_player.play()
         self._video_active = True
@@ -1196,8 +1212,44 @@ class DisplayWindow(QWidget):
         self.ownershipChanged.emit("video", self._video_owner)
         self._mark_activity()
 
+    def _video_watchdog(self) -> None:
+        """Called from _tick.  A clip whose picture never advances past the
+        first frame looks like a still image on the stream.  The usual cause
+        is the player clock being tied to an audio device that is not
+        consuming samples (busy / exclusive / missing): video then waits on
+        audio forever.  Detect it ~2 s in and replay the clip without sound."""
+        if not self._video_active or self._video_watch_done or self._video_player is None:
+            return
+        elapsed = (time.perf_counter_ns() / 1_000_000.0) - self._video_start_ms
+        if elapsed < 2000.0:
+            return
+        self._video_watch_done = True
+        name = os.path.basename(self._video_url.toLocalFile() or self._video_url.toString()) if self._video_url else "?"
+        if self._video_frames >= 10:
+            return
+        pos = self._video_player.position()
+        if not self._video_muted_retry:
+            self._video_muted_retry = True
+            self._video_watch_done = False
+            self.videoDiag.emit(f"stalled: {name} frames={self._video_frames} pos={pos}ms after {elapsed:.0f}ms -> replay without audio")
+            self._video_frames = 0
+            self._video_start_ms = time.perf_counter_ns() / 1_000_000.0
+            url = self._video_url
+            self._video_player.stop()
+            self._video_player.setAudioOutput(None)
+            self._video_player.setSource(QUrl())
+            self._video_player.setSource(url)
+            self._video_player.play()
+        else:
+            self.videoDiag.emit(f"still stalled without audio: {name} frames={self._video_frames} pos={pos}ms")
+
     def _stop_video_internal(self) -> None:
         had_video = self._video_active or self._video_url is not None
+        if self._video_active and self._video_url is not None:
+            el = (time.perf_counter_ns() / 1_000_000.0) - self._video_start_ms
+            nm = os.path.basename(self._video_url.toLocalFile() or self._video_url.toString())
+            self.videoDiag.emit(f"played: {nm} frames={self._video_frames} in {el/1000.0:.1f}s"
+                                + (" (no audio: stall recovery)" if self._video_muted_retry else ""))
         if self._video_player is not None:
             self._video_player.stop()
             self._video_player.setSource(QUrl())
@@ -1237,6 +1289,7 @@ class DisplayWindow(QWidget):
 
     def _on_video_error(self, err, msg) -> None:
         print(f"[video] error {err}: {msg}")
+        self.videoDiag.emit(f"error {err}: {msg}")
         self._stop_video_internal()
 
     @Slot()
@@ -1305,6 +1358,7 @@ class DisplayWindow(QWidget):
         self._last_ns = now
         if dt_ms > 100:
             dt_ms = 100
+        self._video_watchdog()
         if self._scene is not None:
             if not self._scene.update(dt_ms):
                 self._scene = None
