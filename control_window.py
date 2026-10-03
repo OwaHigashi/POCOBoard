@@ -18,8 +18,8 @@ import urllib.request
 from PySide6.QtCore    import Qt, QTimer, Signal, Slot
 from PySide6.QtGui     import QFont, QGuiApplication
 from PySide6.QtWidgets import (
-    QApplication, QAbstractScrollArea, QCheckBox, QComboBox, QDialog,
-    QFileDialog, QFrame, QGridLayout, QGroupBox, QHBoxLayout, QLabel,
+    QApplication, QAbstractScrollArea, QCheckBox, QComboBox, QDialog, QDoubleSpinBox,
+    QFileDialog, QFormLayout, QFrame, QGridLayout, QGroupBox, QHBoxLayout, QLabel,
     QMessageBox, QLineEdit, QPlainTextEdit, QPushButton, QScrollArea,
     QSlider, QSpinBox, QTabWidget, QTextBrowser, QTextEdit, QVBoxLayout,
     QWidget,
@@ -841,6 +841,331 @@ class PromptDialog(QDialog):
             self._log("AI/PROMPT", "RESET")
 
 
+class OwakusaTab(QWidget):
+    """「🤖 オワクサ」タブ: おわくさ (POCOMon scripts/owakusa.py) の機能の設定を、動作中に 取得 / 設定 する。
+
+    項目の一覧 (見出し・名前・種類・いまの値・説明) はおわくさ側が持っていて、GET /settings で受け取って画面を組み立てる。
+    おわくさ側に設定が増えれば、POCOBoard を変えなくてもここに出る。
+      GET /settings                                   → {"groups": [{"title", "items": [{"key", "label", "type", "value", "default", "help", "min", "max"}]}]}
+      PUT /settings {"values": {key: 値}, "save": bool} → 同上 + "changed" / "errors" / "saved"   ("reset": true で起動時の値に戻す)
+    値は「設定」を押すまで送らない (欄を動かしただけでは反映しない)。送るのは、取得したときから変えた項目だけ。
+    HTTP は別スレッドで叩き、結果を Signal で Qt スレッドに戻す。
+    """
+
+    _done = Signal(str, object)     # (op, dict | str error)
+    _TIMEOUT = 8.0
+
+    def __init__(self, parent: QWidget, bridge: WebBridge, log_cb, open_prompt=None) -> None:
+        super().__init__(parent)
+        self._bridge = bridge
+        self._log = log_cb
+        self._busy = False
+        self._loaded = False
+        self._widgets: dict[str, tuple[str, QWidget]] = {}     # key -> (type, widget)
+        self._values: dict[str, object] = {}                   # 取得したときの値
+        self._done.connect(self._on_done)
+
+        v = QVBoxLayout(self)
+        v.setSpacing(8)
+        v.setContentsMargins(10, 10, 10, 10)
+
+        row = QHBoxLayout()
+        row.addWidget(QLabel("おわくさの場所:"))
+        self.edUrl = QLineEdit()
+        self.edUrl.setPlaceholderText("http://10.1.2.12:8765  (おわくさが動くと自動で入ります)")
+        self.edUrl.setMinimumHeight(30)
+        self.edUrl.setToolTip("おわくさ (owakusa.py) の制御口の URL。おわくさが POST /ai を送ってくるたびに名乗るので、通常は自動で入ります。")
+        row.addWidget(self.edUrl, stretch=1)
+        self.btnUrlAuto = QPushButton("自動")
+        self.btnUrlAuto.setMinimumHeight(30)
+        self.btnUrlAuto.setToolTip("おわくさが最後に名乗った URL を入れ直します。")
+        self.btnUrlAuto.clicked.connect(self._fill_url_from_bridge)
+        row.addWidget(self.btnUrlAuto)
+        v.addLayout(row)
+
+        row2 = QHBoxLayout()
+        row2.setSpacing(6)
+        self.btnGet = QPushButton("取得")
+        self.btnGet.setMinimumHeight(34)
+        self.btnGet.setMinimumWidth(90)
+        self.btnGet.setToolTip("動作中のおわくさから、いまの設定を取得して表示します (GET /settings)。")
+        self.btnGet.clicked.connect(self.fetch)
+        row2.addWidget(self.btnGet)
+        self.btnSet = QPushButton("設定")
+        self.btnSet.setProperty("class", "send")
+        self.btnSet.setMinimumHeight(34)
+        self.btnSet.setMinimumWidth(90)
+        self.btnSet.setToolTip("変えた項目をおわくさに送ります (PUT /settings)。次の返事から効きます。\n"
+                               "欄を動かしただけでは反映されません。このボタンを押したときだけ送ります。")
+        self.btnSet.clicked.connect(self.apply)
+        row2.addWidget(self.btnSet)
+        self.btnReset = QPushButton("起動時の値に戻す")
+        self.btnReset.setMinimumHeight(34)
+        self.btnReset.setToolTip("全部の項目を、おわくさが起動したときの値 (owakusa.ini) に戻します。")
+        self.btnReset.clicked.connect(self.reset)
+        row2.addWidget(self.btnReset)
+        row2.addSpacing(10)
+        self.chkSave = QCheckBox("おわくさ側に保存 (再起動後も有効)")
+        self.chkSave.setToolTip("ON にして「設定」すると、おわくさ側のファイル (owakusa_settings.json) にも書き、\n"
+                                "おわくさを起動し直しても同じ設定で始まります (bot.sh と link.sh で別々に覚えます)。\n"
+                                "OFF なら今回の起動中だけ有効。")
+        row2.addWidget(self.chkSave)
+        row2.addStretch(1)
+        if open_prompt is not None:
+            self.btnPrompt = QPushButton("🧠 システムプロンプト編集…")
+            self.btnPrompt.setMinimumHeight(34)
+            self.btnPrompt.setToolTip("人格・口調のプロンプトを編集する画面を開きます。")
+            self.btnPrompt.clicked.connect(open_prompt)
+            row2.addWidget(self.btnPrompt)
+        v.addLayout(row2)
+
+        self.lblStatus = QLabel("「取得」を押すと、いま動いているおわくさの設定がここに並びます。")
+        self.lblStatus.setProperty("class", "small")
+        self.lblStatus.setWordWrap(True)
+        v.addWidget(self.lblStatus)
+
+        self.scroll = QScrollArea()
+        self.scroll.setObjectName("tabScroll")
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.body = QWidget()
+        self.bodyLayout = QVBoxLayout(self.body)
+        self.bodyLayout.setSpacing(10)
+        self.bodyLayout.setContentsMargins(0, 0, 6, 0)
+        self.bodyLayout.addStretch(1)
+        self.scroll.setWidget(self.body)
+        v.addWidget(self.scroll, stretch=1)
+
+    # ---- helpers ----
+    def _fill_url_from_bridge(self) -> None:
+        url = self._bridge.ai_url()
+        if url:
+            self.edUrl.setText(url)
+        else:
+            self._set_status("おわくさからまだ POST /ai が来ていません (URL が分かりません)。おわくさを起動するか、URL を手で入れてください。",
+                             error=True)
+
+    def _url(self) -> str:
+        u = self.edUrl.text().strip().rstrip("/")
+        if not u:
+            u = self._bridge.ai_url()
+            if u:
+                self.edUrl.setText(u)
+        return u
+
+    def _set_status(self, text: str, error: bool = False) -> None:
+        self.lblStatus.setText(text)
+        self.lblStatus.setStyleSheet("color:#b03a2e;" if error else "color:#3d7a4a;")
+
+    def _set_busy(self, busy: bool) -> None:
+        self._busy = busy
+        for b in (self.btnGet, self.btnSet, self.btnReset):
+            b.setEnabled(not busy)
+
+    def showEvent(self, ev) -> None:   # noqa: N802 (Qt override)
+        super().showEvent(ev)
+        if not self.edUrl.text().strip():
+            self.edUrl.setText(self._bridge.ai_url())
+        if not self._loaded and self._url():
+            self.fetch()
+
+    def on_ai_url(self, url: str) -> None:
+        """おわくさが URL を名乗った (起動した)。まだ取得していなければ取得する。"""
+        if url and not self.edUrl.text().strip():
+            self.edUrl.setText(url)
+        if not self._loaded and self.isVisible():
+            self.fetch()
+
+    # ---- 項目の欄 ----
+    @staticmethod
+    def _make_widget(it: dict) -> QWidget:
+        t = it.get("type")
+        if t == "bool":
+            w = QCheckBox("ON")
+        elif t == "int":
+            w = QSpinBox()
+            w.setRange(int(it.get("min", 0)), int(it.get("max", 1_000_000)))
+            w.setMaximumWidth(140)
+        elif t == "float":
+            w = QDoubleSpinBox()
+            w.setDecimals(2)
+            w.setSingleStep(0.1)
+            w.setRange(float(it.get("min", 0.0)), float(it.get("max", 1_000_000.0)))
+            w.setMaximumWidth(140)
+        elif t == "text":
+            w = QPlainTextEdit()
+            w.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
+            w.setFixedHeight(96)
+        else:
+            w = QLineEdit()
+        w.setMinimumHeight(28)
+        tip = str(it.get("help") or "")
+        if it.get("default") is not None:
+            tip += f"\n起動時の値: {it['default']}"
+        w.setToolTip(tip)
+        return w
+
+    @staticmethod
+    def _put(t: str, w: QWidget, value) -> None:
+        if t == "bool":
+            w.setChecked(bool(value))
+        elif t == "int":
+            w.setValue(int(value or 0))
+        elif t == "float":
+            w.setValue(float(value or 0.0))
+        elif t == "text":
+            w.setPlainText(str(value if value is not None else ""))
+        else:
+            w.setText(str(value if value is not None else ""))
+
+    @staticmethod
+    def _take(t: str, w: QWidget):
+        if t == "bool":
+            return bool(w.isChecked())
+        if t == "int":
+            return int(w.value())
+        if t == "float":
+            return round(float(w.value()), 4)
+        if t == "text":
+            return w.toPlainText().strip()
+        return w.text().strip()
+
+    def _rebuild(self, groups: list) -> None:
+        """おわくさから受け取った一覧で、欄を作り直す。"""
+        while self.bodyLayout.count():
+            item = self.bodyLayout.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
+        self._widgets.clear()
+        self._values.clear()
+        for g in groups:
+            box = QGroupBox(str(g.get("title") or ""))
+            form = QFormLayout(box)
+            form.setLabelAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            form.setHorizontalSpacing(12)
+            form.setVerticalSpacing(6)
+            for it in g.get("items") or []:
+                key, t = str(it.get("key")), str(it.get("type"))
+                w = self._make_widget(it)
+                self._put(t, w, it.get("value"))
+                lab = QLabel(str(it.get("label") or key))
+                lab.setToolTip(w.toolTip())
+                lab.setWordWrap(True)
+                cell = QWidget()
+                h = QHBoxLayout(cell)
+                h.setContentsMargins(0, 0, 0, 0)
+                h.setSpacing(8)
+                h.addWidget(w, stretch=1 if t in ("str", "text") else 0)
+                if t not in ("str", "text"):
+                    note = QLabel(str(it.get("help") or ""))
+                    note.setProperty("class", "small")
+                    note.setWordWrap(True)
+                    h.addWidget(note, stretch=1)
+                form.addRow(lab, cell)
+                self._widgets[key] = (t, w)
+                self._values[key] = self._take(t, w)
+            self.bodyLayout.addWidget(box)
+        self.bodyLayout.addStretch(1)
+
+    def _changed(self) -> dict:
+        out = {}
+        for key, (t, w) in self._widgets.items():
+            cur = self._take(t, w)
+            if cur != self._values.get(key):
+                out[key] = cur
+        return out
+
+    # ---- actions ----
+    def fetch(self) -> None:
+        self._request("get", "GET", None)
+
+    def apply(self) -> None:
+        if not self._loaded:
+            self._set_status("先に「取得」してください。", error=True)
+            return
+        vals = self._changed()
+        if not vals and not self.chkSave.isChecked():
+            self._set_status("変えた項目がありません。")
+            return
+        self._request("set", "PUT", {"values": vals, "save": self.chkSave.isChecked()})
+
+    def reset(self) -> None:
+        self._request("reset", "PUT", {"reset": True, "save": self.chkSave.isChecked()})
+
+    def _request(self, op: str, method: str, payload: dict | None) -> None:
+        if self._busy:
+            return
+        url = self._url()
+        if not url:
+            self._set_status("おわくさの場所 (URL) が分かりません。おわくさを起動すると自動で入ります。", error=True)
+            return
+        self._set_busy(True)
+        self._set_status({"get": "取得中…", "set": "設定中…", "reset": "起動時の値に戻しています…"}[op])
+        headers = {"Content-Type": "application/json; charset=utf-8"}
+        tok = self._bridge.ai_token()
+        if tok:
+            headers["X-Poco-AI-Token"] = tok
+        data = json.dumps(payload, ensure_ascii=False).encode("utf-8") if payload is not None else None
+
+        def work() -> None:
+            try:
+                req = urllib.request.Request(url + "/settings", data=data, headers=headers, method=method)
+                with urllib.request.urlopen(req, timeout=self._TIMEOUT) as resp:
+                    res = json.loads(resp.read().decode("utf-8") or "{}")
+            except urllib.error.HTTPError as e:
+                try:
+                    body = e.read().decode("utf-8", "replace")[:200]
+                except Exception:
+                    body = ""
+                res = f"HTTP {e.code} {body}"
+            except Exception as e:      # noqa: BLE001 — surface anything to the operator
+                res = f"{type(e).__name__}: {e}"
+            self._done.emit(op, res)
+
+        threading.Thread(target=work, name="poco-owakusa", daemon=True).start()
+
+    @Slot(str, object)
+    def _on_done(self, op: str, res: object) -> None:
+        self._set_busy(False)
+        if not isinstance(res, dict) or not res.get("ok"):
+            why = res if isinstance(res, str) else (res.get("reason", "?") if isinstance(res, dict) else "?")
+            hint = ""
+            if "bad_token" in str(why):
+                hint = "  (config.ini の ai_token と owakusa.ini の token を揃えてください)"
+            elif "404" in str(why):
+                hint = "  (おわくさが古い版です。POCOMon を更新して起動し直してください)"
+            elif "URLError" in str(why) or "refused" in str(why) or "timed out" in str(why):
+                hint = "  (おわくさが動いているか、URL / Windows Firewall を確認)"
+            self._set_status(f"✖ {'取得' if op == 'get' else '設定'}に失敗: {why}{hint}", error=True)
+            self._log("AI/SETTINGS", f"✖ {op} failed: {why}")
+            return
+        self._rebuild(res.get("groups") or [])
+        self._loaded = True
+        n = len(self._widgets)
+        mode = {"bot": "bot.sh (ほかの人の枠)", "link": "link.sh (自分の枠)"}.get(res.get("mode"), res.get("mode"))
+        head = f"{res.get('name', 'おわくさ')} / {mode} / {n} 項目"
+        if op == "get":
+            self._set_status(f"✔ 取得しました ({head})。変えたい欄を直して「設定」で反映します。")
+            self._log("AI/SETTINGS", f"GET  {n} 項目 ({res.get('mode')})")
+            return
+        changed = res.get("changed") or []
+        errors = res.get("errors") or {}
+        saved = res.get("saved")
+        text = ("✔ 起動時の値に戻しました" if op == "reset" else "✔ 設定しました") + f" ({head})。"
+        text += f" 変わった項目: {', '.join(changed)}" if changed else " 変わった項目はありません。"
+        if saved:
+            text += f"  保存: {saved}"
+        elif op == "set":
+            text += "  (今回の起動中のみ)"
+        if errors:
+            text += f"  ✖ 変えられなかった項目: {errors}"
+        self._set_status(text, error=bool(errors))
+        self._log("AI/SETTINGS", f"{'RESET' if op == 'reset' else 'SET '} changed={changed}"
+                                 f"{'  errors=' + str(errors) if errors else ''}{'  saved=' + str(saved) if saved else ''}")
+
+
 class ControlWindow(QWidget):
 
     def __init__(self, bridge: WebBridge, audio: AudioEngine,
@@ -928,6 +1253,9 @@ class ControlWindow(QWidget):
         self.tabs.addTab(self._scrollable(self._build_piano_tab()),   "🎹 ピアノロール")
         self.tabs.addTab(self._build_queue_tab(),                     "📥 キュー")
         self.tabs.addTab(self._build_users_tab(),                     "👥 ユーザー")
+        self.owakusaTab = OwakusaTab(self, self.bridge, self._log_local,
+                                     open_prompt=lambda: self._prompt_dialog_lazy().show())
+        self.tabs.addTab(self.owakusaTab,                             "🤖 オワクサ")
         self.tabs.addTab(self._build_log_tab(),                       "📜 ログ")
         self.QUEUE_TAB_INDEX = 4
         # Clear the attention color once the operator actually looks at the queue.
@@ -1398,6 +1726,7 @@ class ControlWindow(QWidget):
     @Slot(str)
     def _on_ai_url_changed(self, url: str) -> None:
         self._prompt_dialog_lazy().refresh_state()
+        self.owakusaTab.on_ai_url(url)
 
     def _on_ai_state(self, res: dict | None) -> None:
         """おわくさの応答 (GET/PUT /prompt) から「Pococha にもコメント投稿」チェックを同期する。"""
