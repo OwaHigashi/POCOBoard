@@ -165,6 +165,7 @@ class CommentFeed:
         runs = _parse_runs(body) if body.strip() else []
         if not runs and not who:
             return "EMPTY"
+        kind = "viewer" if kind in ("item", "tag") else kind   # web board only distinguishes these
         kind = kind if kind in _WHO_COLORS else "text"
         e = Entry(kind=kind, who=(who or "").strip(), text=body, runs=runs,
                   ttl_s=self.ttl_s)

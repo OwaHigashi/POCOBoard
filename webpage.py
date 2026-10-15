@@ -326,8 +326,14 @@ INDEX_HTML = r"""<!doctype html>
   .bd.src-clear .body { color: #a49a90; font-size: 13px; letter-spacing: .05em; }
   .bd .body { min-width: 0; }
   .bd .who { font-weight: 700; margin-right: 6px; }
-  .bd.kind-viewer .who { color: #78ebeb; }
-  .bd.kind-ai     .who { color: #ffe65a; }
+  .bd.kind-viewer .who { color: #ffe65a; }
+  .bd.kind-viewer .body { color: #ffffff; }
+  /* アイテム: 赤 / タグ: 白地に黒 / おわくさ: 灰色 (目立たせない) */
+  .bd.kind-item .who, .bd.kind-item .body { color: #ff4646; }
+  .bd.kind-tag { background: #ffffff; border-radius: 4px; }
+  .bd.kind-tag .t { color: #555; }
+  .bd.kind-tag .who, .bd.kind-tag .body { color: #000000; }
+  .bd.kind-ai     .who, .bd.kind-ai .body { color: #8c8c8c; }
   .bd.kind-info   .who { color: #b4b4c8; }
   .bd.kind-text   .who { color: #ffffff; }
   .bd.kind-info .body { color: #c8c8d7; }
@@ -1485,7 +1491,7 @@ function boardScrollBottom() {
 }
 function boardRender(e) {
   const row = document.createElement('div');
-  const kind = ['viewer','ai','info','text'].includes(e.kind) ? e.kind : 'text';
+  const kind = ['viewer','item','tag','ai','info','text'].includes(e.kind) ? e.kind : 'text';
   row.className = 'bd src-' + (e.src || 'comment') + ' kind-' + kind;
   if (e.src === 'clear') {
     row.innerHTML = '<span class="t">' + escHtml(e.t || '') + '</span>' +
