@@ -2618,6 +2618,11 @@ class ControlWindow(QWidget):
             who = (ln.get("who") or "").strip()
             text = (ln.get("text") or "").strip()
             kind = ln.get("kind") or "text"
+            if kind == "item":
+                # アイテム (名前・投げた人・値段) は web 画面の文字ログにだけ載せる (黄色地)。配信画面には出さない
+                if text or who:
+                    self.display.textShown.emit("comment", who, text, "item")
+                continue
             if mode == "comment":
                 self.display.add_comment(text, who=who, kind=kind)
             else:

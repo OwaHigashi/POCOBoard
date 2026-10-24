@@ -328,8 +328,10 @@ INDEX_HTML = r"""<!doctype html>
   .bd .who { font-weight: 700; margin-right: 6px; }
   .bd.kind-viewer .who { color: #ffe65a; }
   .bd.kind-viewer .body { color: #ffffff; }
-  /* アイテム: 赤 / タグ: 白地に黒 / おわくさ: 灰色 (目立たせない) */
-  .bd.kind-item .who, .bd.kind-item .body { color: #ff4646; }
+  /* アイテム: 黄色地に黒 / タグ: 白地に黒 / おわくさ: 灰色 (目立たせない) */
+  .bd.kind-item { background: #ffd600; border-radius: 4px; }
+  .bd.kind-item .t { color: #5a4600; }
+  .bd.kind-item .who, .bd.kind-item .body { color: #000000; }
   .bd.kind-tag { background: #ffffff; border-radius: 4px; }
   .bd.kind-tag .t { color: #555; }
   .bd.kind-tag .who, .bd.kind-tag .body { color: #000000; }
