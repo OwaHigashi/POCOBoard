@@ -993,7 +993,16 @@ class _Handler(BaseHTTPRequestHandler):
         now_hms = time.strftime("%H:%M:%S")
         for c in cmds:
             self.bridge.aiRequested.emit(cid, label, ip, c)
-            self.bridge.emit_log("AI", f"{now_hms}  {label:24s}  AI        {_ai_preview(c)}")
+            head = f"{now_hms}  {label:24s}  AI        "
+            if c.get("cmd") in ("say", "comment"):
+                # 文字の行は 1 行ずつ、種類 (kind) ごとに web 画面の文字ログと同じ色で出す。名前と本文は \x1f で区切って渡す
+                for ln in c["lines"]:
+                    txt = (ln.get("text") or "").replace("\n", " ")
+                    txt = txt[:57] + "..." if len(txt) > 60 else txt
+                    self.bridge.emit_log(f"AI/{ln.get('kind') or 'text'}",
+                                         f"{head}{c['cmd']:<8s} \x1f{ln.get('who') or ''}\x1f{txt}")
+            else:
+                self.bridge.emit_log("AI", f"{head}{_ai_preview(c)}")
         self.bridge.note_ai()
         snap = self.bridge.ai_snapshot()
         self._send_json(200, {"ok": True, "n": len(cmds), "rejected": rejected,

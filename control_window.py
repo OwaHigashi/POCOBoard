@@ -2695,21 +2695,40 @@ class ControlWindow(QWidget):
         "AI":           "#5a8fbf",
         "COMMENT":      "#6c9c7a",
     }
+    # おわくさから届いた文字の行 (kind "AI/<種類>")。web 画面の文字ログ (webpage.py の .bd.kind-*) と同じ色:
+    # (地の色, 名前の色, 本文の色)。アイテムは黄色地に黒、タグは水色地に黒、ほかは web と同じ暗い地
+    _LOG_LINE = {
+        "viewer": ("#1d1a17", "#ffe65a", "#ffffff"),
+        "item":   ("#ffd600", "#000000", "#000000"),
+        "tag":    ("#80deea", "#000000", "#000000"),
+        "ai":     ("#1d1a17", "#8c8c8c", "#8c8c8c"),
+        "info":   ("#1d1a17", "#b4b4c8", "#c8c8d7"),
+        "text":   ("#1d1a17", "#ffffff", "#f4f1ec"),
+    }
 
     @Slot(str, str)
     def on_request_logged(self, kind: str, line: str) -> None:
-        color = self._LOG_COLORS.get(kind, "#d6dce8")
-        safe = (line.replace("&", "&amp;")
-                    .replace("<", "&lt;")
-                    .replace(">", "&gt;")
-                    .replace("  ", "&nbsp;&nbsp;"))
+        def esc(t: str) -> str:
+            return (t.replace("&", "&amp;").replace("<", "&lt;")
+                     .replace(">", "&gt;").replace("  ", "&nbsp;&nbsp;"))
+
         # Linkify client ids (#a1b2c3d4) so the operator can click one to
         # open the block dialog — works even after the sender's row has
         # scrolled out of the ユーザー tab.
-        safe = re.sub(
-            r"#([0-9a-f]{6,16})\b",
-            r'<a href="pocoid:\1" style="color:inherit;">#\1</a>',
-            safe)
+        def linkify(t: str) -> str:
+            return re.sub(r"#([0-9a-f]{6,16})\b",
+                          r'<a href="pocoid:\1" style="color:inherit;">#\1</a>', t)
+
+        style = f"color:{self._LOG_COLORS.get(kind, '#d6dce8')};"
+        if kind.startswith("AI/") and line.count("\x1f") == 2:
+            head, who, text = line.split("\x1f")
+            bg, wc, tc = self._LOG_LINE.get(kind[3:], self._LOG_LINE["text"])
+            safe = (linkify(esc(head)) + f'<span style="background-color:{bg};">&nbsp;'
+                    + (f'<b style="color:{wc};">{esc(who)}</b>&nbsp;&nbsp;' if who else "")
+                    + f'<span style="color:{tc};">{esc(text)}</span>&nbsp;</span>')
+            style = f"color:{self._LOG_COLORS['AI']};"
+        else:
+            safe = linkify(esc(line))
         # Early callers (e.g. piano-box MIDI auto-connect during _build_ui)
         # can fire before _build_log_tab has created self.logView. Buffer
         # those lines and flush them when the log tab is built.
@@ -2717,7 +2736,7 @@ class ControlWindow(QWidget):
             self._pending_log_lines.append((kind, line))
             return
         self.logView.append(
-            f'<span style="color:{color}; font-family:Consolas,monospace;">'
+            f'<span style="{style} font-family:Consolas,monospace;">'
             f'{safe}</span>'
         )
         if self.logView.document().blockCount() > 500:
