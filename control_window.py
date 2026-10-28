@@ -2593,9 +2593,12 @@ class ControlWindow(QWidget):
         text = self.cmEdit.text().strip()
         if not text:
             return
-        res = self.display.add_comment(text, who="", kind="text")
+        res = self.display.add_comment(text, who="", kind="local")
         preview = text if len(text) <= 60 else text[:57] + "..."
-        self._log_local("COMMENT", f"{'' if res == 'OK' else '✖ ' + res + '  '}{preview}")
+        if res == "OK":
+            self._log_local_text("COMMENT", "", preview)
+        else:
+            self._log_local("COMMENT", f"✖ {res}  {preview}")
         if res == "OK":
             self.cmEdit.clear()
 
@@ -2604,11 +2607,14 @@ class ControlWindow(QWidget):
         self._log_local("COMMENT", "CLEAR")
 
     # ---------------- おわくさ AI commands (POST /ai) ----------------
+    # 横スクロールには地の色が付けられないので、文字の色だけ配信画面のコメントフィードに寄せる (名前, 本文)
     _AI_MARQUEE_STYLE = {
-        "viewer": ("<c>", "</>"),
-        "ai":     ("<y>", "</>"),
-        "info":   ("<w>", "</>"),
-        "text":   ("", ""),
+        "viewer": (("<y>", "</>"), ("", "")),
+        "event":  (("<r>", "</>"), ("<r>", "</>")),
+        "tag":    (("", ""), ("", "")),
+        "ai":     (("", ""), ("<gray>", "</>")),
+        "info":   (("<w>", "</>"), ("", "")),
+        "text":   (("", ""), ("", "")),
     }
 
     def _show_lines(self, lines: list, speed: int, force: str = "") -> None:
@@ -2618,18 +2624,19 @@ class ControlWindow(QWidget):
             who = (ln.get("who") or "").strip()
             text = (ln.get("text") or "").strip()
             kind = ln.get("kind") or "text"
-            if kind == "item":
-                # アイテム (名前・投げた人・値段) は web 画面の文字ログにだけ載せる (黄色地)。配信画面には出さない
+            if kind in ("item", "deco"):
+                # アイテム (名前・投げた人・値段) と絵文字だけのコメント (deco) は web 画面の文字ログにだけ載せる。配信画面には出さない
                 if text or who:
-                    self.display.textShown.emit("comment", who, text, "item")
+                    self.display.textShown.emit("comment", who, text, "item" if kind == "item" else "viewer")
                 continue
             if mode == "comment":
                 self.display.add_comment(text, who=who, kind=kind)
             else:
-                o, c = self._AI_MARQUEE_STYLE.get(kind, ("", ""))
-                body = f"{o}{who}{c} {text}".strip() if who else text
+                (wo, wc), (to, tc) = self._AI_MARQUEE_STYLE.get(kind, self._AI_MARQUEE_STYLE["text"])
+                shown = f"{to}{text}{tc}" if text else ""
+                body = f"{wo}{who}{wc} {shown}".strip() if who else shown
                 if body:
-                    self.display.add_marquee(body, speed)
+                    self.display.add_marquee(body, speed, who=who, body=text, kind=kind)
 
     @Slot(str, str, str, object)
     def on_ai_command(self, cid: str, label: str, ip: str, c: object) -> None:
@@ -2695,13 +2702,16 @@ class ControlWindow(QWidget):
         "AI":           "#5a8fbf",
         "COMMENT":      "#6c9c7a",
     }
-    # おわくさから届いた文字の行 (kind "AI/<種類>")。web 画面の文字ログ (webpage.py の .bd.kind-*) と同じ色:
-    # (地の色, 名前の色, 本文の色)。アイテムは黄色地に黒、タグは水色地に黒、ほかは web と同じ暗い地
+    # おわくさから届いた文字の行 (kind "AI/<種類>") と制御画面から打った文字 (kind "LOCAL/local")。
+    # web 画面の文字ログ (webpage.py の .bd.kind-*) と同じ色: (地の色, 名前の色, 本文の色)
     _LOG_LINE = {
         "viewer": ("#1d1a17", "#ffe65a", "#ffffff"),
+        "deco":   ("#1d1a17", "#ffe65a", "#ffffff"),
+        "event":  ("#e53935", "#000000", "#000000"),
         "item":   ("#ffd600", "#000000", "#000000"),
-        "tag":    ("#80deea", "#000000", "#000000"),
-        "ai":     ("#1d1a17", "#8c8c8c", "#8c8c8c"),
+        "tag":    ("#ffffff", "#000000", "#000000"),
+        "ai":     ("#1d1a17", "#ffffff", "#8c8c8c"),
+        "local":  ("#000000", "#ff4646", "#ff4646"),
         "info":   ("#1d1a17", "#b4b4c8", "#c8c8d7"),
         "text":   ("#1d1a17", "#ffffff", "#f4f1ec"),
     }
@@ -2720,13 +2730,13 @@ class ControlWindow(QWidget):
                           r'<a href="pocoid:\1" style="color:inherit;">#\1</a>', t)
 
         style = f"color:{self._LOG_COLORS.get(kind, '#d6dce8')};"
-        if kind.startswith("AI/") and line.count("\x1f") == 2:
+        if kind.startswith(("AI/", "LOCAL/")) and line.count("\x1f") == 2:
             head, who, text = line.split("\x1f")
-            bg, wc, tc = self._LOG_LINE.get(kind[3:], self._LOG_LINE["text"])
+            bg, wc, tc = self._LOG_LINE.get(kind.split("/", 1)[1], self._LOG_LINE["text"])
             safe = (linkify(esc(head)) + f'<span style="background-color:{bg};">&nbsp;'
                     + (f'<b style="color:{wc};">{esc(who)}</b>&nbsp;&nbsp;' if who else "")
                     + f'<span style="color:{tc};">{esc(text)}</span>&nbsp;</span>')
-            style = f"color:{self._LOG_COLORS['AI']};"
+            style = f"color:{self._LOG_COLORS['AI' if kind.startswith('AI/') else 'LOCAL']};"
         else:
             safe = linkify(esc(line))
         # Early callers (e.g. piano-box MIDI auto-connect during _build_ui)
@@ -2753,6 +2763,12 @@ class ControlWindow(QWidget):
         now = _time.strftime("%H:%M:%S")
         line = f"{now}  LOCAL                     {kind:<10s}{details}"
         self.on_request_logged(kind, line)
+
+    def _log_local_text(self, kind: str, details: str, text: str) -> None:
+        """制御画面から打って画面に出た文字の行。文字は黒地に赤 (web 画面の文字ログの kind local と同じ)。"""
+        import time as _time
+        now = _time.strftime("%H:%M:%S")
+        self.on_request_logged("LOCAL/local", f"{now}  LOCAL                     {kind:<10s}{details}\x1f\x1f{text}")
 
     # ---------------- log-click block dialog ----------------
     def _on_log_anchor(self, url) -> None:
@@ -3081,10 +3097,10 @@ class ControlWindow(QWidget):
         if not text:
             return
         speed = int(self.cbSpeed.currentData() or 1)
-        res = self.display.add_marquee(text, speed)
+        res = self.display.add_marquee(f"<r>{text}</>", speed, body=text, kind="local")
         preview = text if len(text) <= 60 else text[:57] + "..."
         if res == "OK":
-            self._log_local("MARQUEE", f"x{speed}  {preview}")
+            self._log_local_text("MARQUEE", f"x{speed}  ", preview)
         else:
             self._log_local("MARQUEE", f"x{speed}  ✖ {res}  {preview}")
             self.btnMqSend.setStyleSheet(

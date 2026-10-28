@@ -11,7 +11,7 @@ Styling markup (subset of M5Tab-Poco's vocabulary, extended with Niconico
 color names):
 
   <r> <red>            <g> <green>      <b> <blue>
-  <y> <yellow>         <c> <cyan>       <m> <purple>  <pink>
+  <y> <yellow>         <c> <cyan>       <m> <purple>  <pink>  <gray>
   <w> <white>          <o> <orange>     — closed by </> or </color>
   <small>/<s1>  <normal>/<s2>  <big>/<s3>
   <u>...</u>                underline
@@ -52,6 +52,7 @@ _COLORS = {
     "white":  QColor(255, 255, 255),
     "orange": QColor(255, 160,  50),
     "pink":   QColor(255, 140, 200),
+    "gray":   QColor(140, 140, 140),
 }
 
 _SIZE_SCALE = {

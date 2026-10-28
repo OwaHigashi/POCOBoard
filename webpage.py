@@ -328,14 +328,23 @@ INDEX_HTML = r"""<!doctype html>
   .bd .who { font-weight: 700; margin-right: 6px; }
   .bd.kind-viewer .who { color: #ffe65a; }
   .bd.kind-viewer .body { color: #ffffff; }
-  /* アイテム: 黄色地に黒 / タグ: 水色地に黒 / おわくさ: 灰色 (目立たせない)。制御画面のログ (control_window._LOG_LINE) とおわくさの端末も同じ色 */
+  /* 視聴者のコメント: 名前 黄・本文 白 / 入室・コア・プチ・エール・カラオケ (event): 赤地に黒 / タグ: 白地に黒 /
+     アイテム: 黄色地に黒 / おわくさ: 名前 白・本文 灰 / 制御画面から打った文字 (local): 黒地に赤。
+     配信画面 (comment_feed)・制御画面のログ (control_window._LOG_LINE)・おわくさの端末も同じ色 */
+  .bd.kind-event { background: #e53935; border-radius: 4px; }
+  .bd.kind-event .t { color: #4a0d0b; }
+  .bd.kind-event .who, .bd.kind-event .body { color: #000000; }
   .bd.kind-item { background: #ffd600; border-radius: 4px; }
   .bd.kind-item .t { color: #5a4600; }
   .bd.kind-item .who, .bd.kind-item .body { color: #000000; }
-  .bd.kind-tag { background: #80deea; border-radius: 4px; }
-  .bd.kind-tag .t { color: #2f5a60; }
+  .bd.kind-tag { background: #ffffff; border-radius: 4px; }
+  .bd.kind-tag .t { color: #555555; }
   .bd.kind-tag .who, .bd.kind-tag .body { color: #000000; }
-  .bd.kind-ai     .who, .bd.kind-ai .body { color: #8c8c8c; }
+  .bd.kind-ai     .who { color: #ffffff; }
+  .bd.kind-ai     .body { color: #8c8c8c; }
+  .bd.kind-event .src, .bd.kind-item .src, .bd.kind-tag .src { color: #000000; border-color: rgba(0,0,0,.3); }
+  .bd.kind-local { background: #000000; border-radius: 4px; }
+  .bd.kind-local .who, .bd.kind-local .body { color: #ff4646; }
   .bd.kind-info   .who { color: #b4b4c8; }
   .bd.kind-text   .who { color: #ffffff; }
   .bd.kind-info .body { color: #c8c8d7; }
@@ -1441,7 +1450,7 @@ const BOARD_KEEP = 1000;      // DOM rows kept per page
 const BOARD_COLORS = {
   r:'#ff4646', red:'#ff4646', g:'#5aeb5a', green:'#5aeb5a', b:'#6e96ff', blue:'#6e96ff',
   y:'#ffe65a', yellow:'#ffe65a', c:'#78ebeb', cyan:'#78ebeb', m:'#dc78eb', purple:'#dc78eb',
-  w:'#ffffff', white:'#ffffff', o:'#ffa032', orange:'#ffa032', pink:'#ff8cc8',
+  w:'#ffffff', white:'#ffffff', o:'#ffa032', orange:'#ffa032', pink:'#ff8cc8', gray:'#8c8c8c',
 };
 const BOARD_SIZES = { small:.7, s1:.7, normal:1, s2:1, big:1.7, s3:1.7 };
 const BOARD_POS   = { ue:'上', top:'上', shita:'下', bottom:'下', naka:'', middle:'' };
@@ -1493,7 +1502,7 @@ function boardScrollBottom() {
 }
 function boardRender(e) {
   const row = document.createElement('div');
-  const kind = ['viewer','item','tag','ai','info','text'].includes(e.kind) ? e.kind : 'text';
+  const kind = ['viewer','event','item','tag','ai','local','info','text'].includes(e.kind) ? e.kind : 'text';
   row.className = 'bd src-' + (e.src || 'comment') + ' kind-' + kind;
   if (e.src === 'clear') {
     row.innerHTML = '<span class="t">' + escHtml(e.t || '') + '</span>' +

@@ -424,13 +424,15 @@ class DisplayWindow(QWidget):
         self._mark_activity()
 
     @Slot(str, int)
-    def add_marquee(self, text: str, speed: int) -> str:
+    def add_marquee(self, text: str, speed: int, who: str = "", body: str | None = None,
+                    kind: str = "text") -> str:
+        """`who` / `body` / `kind` は web 画面の文字ログに載せる形 (おわくさの行・制御画面の文字。省略時は text をそのまま)。"""
         vw, vh = self._virtual_size()
         res = self._marquee.add(text, vw, vh, speed)
         self._emit_marquee_status()
         self._mark_activity()
         if res == "OK":
-            self.textShown.emit("marquee", "", text, "text")
+            self.textShown.emit("marquee", who, text if body is None else body, kind)
         return res
 
     @Slot()
