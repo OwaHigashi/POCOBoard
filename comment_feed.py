@@ -30,20 +30,22 @@ from PySide6.QtGui  import QColor, QFont, QFontMetricsF, QPainter, QPainterPath,
 from marquee import Run, _detect_position_and_strip, _parse_runs
 
 
-# Colour of the `who` prefix / body per entry kind (web 画面の文字ログ webpage.py .bd.kind-* と同じ色).
+# Colour of the `who` prefix / body per entry kind.  配信画面では地の色を塗らない
+# (カメラ映像の上で色の付いた地は見にくい)。地の色を持つ種類は、横スクロールと同じく
+# 文字の色だけで見分ける (web 画面・制御画面のログの地の色はそのまま)。
 #   viewer : a Pococha viewer's comment (名前 黄・本文 白)
-#   event  : 入室・コア・プチ・エール・カラオケ (赤地に黒)
-#   tag    : タグ (白地に黒)
-#   item   : アイテム (黄色地に黒。配信画面には普通は出さない)
+#   event  : 入室・コア・プチ・エール・カラオケ (赤い文字)
+#   tag    : タグ (白い文字)
+#   item   : アイテム (黄色い文字。配信画面には普通は出さない)
 #   ai     : おわくさ's reply (名前 白・本文 灰)
-#   local  : 制御画面から打った文字 (黒地に赤)
+#   local  : 制御画面から打った文字 (赤い文字)
 #   text   : plain line (web からの文字など)
 #   info   : system notice (mode switched, etc.)
 _WHO_COLORS = {
     "viewer": QColor(255, 230,  90),
-    "event":  QColor(  0,   0,   0),
-    "tag":    QColor(  0,   0,   0),
-    "item":   QColor(  0,   0,   0),
+    "event":  QColor(255,  70,  70),
+    "tag":    QColor(255, 255, 255),
+    "item":   QColor(255, 230,  90),
     "ai":     QColor(255, 255, 255),
     "local":  QColor(255,  70,  70),
     "text":   QColor(255, 255, 255),
@@ -51,22 +53,14 @@ _WHO_COLORS = {
 }
 _TEXT_COLORS = {
     "viewer": QColor(255, 255, 255),
-    "event":  QColor(  0,   0,   0),
-    "tag":    QColor(  0,   0,   0),
-    "item":   QColor(  0,   0,   0),
+    "event":  QColor(255,  70,  70),
+    "tag":    QColor(255, 255, 255),
+    "item":   QColor(255, 230,  90),
     "ai":     QColor(140, 140, 140),
     "local":  QColor(255,  70,  70),
     "text":   QColor(255, 255, 255),
     "info":   QColor(200, 200, 215),
 }
-# 地の色を持つ種類 (ほかは半透明の黒い板)。地の色は板の濃さ設定に関係なく濃く塗る
-_PLATE_COLORS = {
-    "event": QColor(229,  57,  53),
-    "tag":   QColor(255, 255, 255),
-    "item":  QColor(255, 214,   0),
-    "local": QColor(  0,   0,   0),
-}
-_LIGHT_PLATES = ("event", "tag", "item")   # 明るい地には黒い文字なので影を付けない
 
 FADE_IN_S  = 0.25
 FADE_OUT_S = 0.6
@@ -135,6 +129,7 @@ class CommentFeed:
         self.bottom_frac: float = 0.04   # comment_bottom_pct
         self.height_frac: float = 0.90   # comment_height_pct (max stack height)
         self.bg_alpha: float = 0.45      # comment_bg_pct
+        self.text_alpha: float = 1.0     # 1 - comment_text_transparency_pct / 100 (文字と影の濃さ)
         self.scroll_ms: float = 350.0    # comment_scroll_ms
         self.show_time: bool = False     # comment_show_time
         # comment_spacing_pct / 100.  Scales the three vertical gaps
@@ -402,15 +397,15 @@ class CommentFeed:
         gap = self._line_gap()
         # Translucent backing plate for legibility over camera / video.
         widest = max((l.width for l in e.lines), default=0.0)
-        plate = _PLATE_COLORS.get(e.kind)
-        if (plate is not None or self.bg_alpha > 0.005) and widest > 0:
-            bg = QColor(plate) if plate is not None else QColor(0, 0, 0)
-            bg.setAlpha(int(255 * (0.92 if plate is not None else self.bg_alpha) * alpha))
+        if self.bg_alpha > 0.005 and widest > 0:
+            bg = QColor(0, 0, 0)
+            bg.setAlpha(int(255 * self.bg_alpha * alpha))
             r = QRectF(x0, y_top, widest + pad * 2, e.height)
             path = QPainterPath()
             path.addRoundedRect(r, pad * 0.8, pad * 0.8)
             p.fillPath(path, bg)
         y = y_top + pad
+        alpha *= self.text_alpha          # ここから下は文字 (と影・ハイライト・下線) だけ
         for line in e.lines:
             baseline = y + line.ascent
             cx = x0 + pad
@@ -424,11 +419,10 @@ class CommentFeed:
                     p.fillRect(QRectF(cx - 2, baseline - s.ascent - 1,
                                       s.width + 4, s.ascent + s.descent + 2), hl)
                 # Soft shadow so white text survives a bright camera frame.
-                if e.kind not in _LIGHT_PLATES:
-                    sh = QColor(0, 0, 0, int(170 * alpha))
-                    p.setPen(sh)
-                    off = max(1.0, f.pixelSize() * 0.04)
-                    p.drawText(int(cx + off), int(baseline + off), s.text)
+                sh = QColor(0, 0, 0, int(170 * alpha))
+                p.setPen(sh)
+                off = max(1.0, f.pixelSize() * 0.04)
+                p.drawText(int(cx + off), int(baseline + off), s.text)
                 p.setPen(col)
                 p.drawText(int(cx), int(baseline), s.text)
                 if s.underline:

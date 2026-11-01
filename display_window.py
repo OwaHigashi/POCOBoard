@@ -507,6 +507,14 @@ class DisplayWindow(QWidget):
         self._feed.bg_alpha = max(0.0, min(1.0, float(opacity)))
         self._dirty = True
 
+    def comment_text_transparency(self) -> float:
+        return 1.0 - self._feed.text_alpha
+
+    def set_comment_text_transparency(self, t: float) -> None:
+        """フィードの文字の透明度 (0 = 不透明 .. 0.9)。背景の板には効かない。"""
+        self._feed.text_alpha = 1.0 - max(0.0, min(0.9, float(t)))
+        self._dirty = True
+
     def set_comment_layout(self, width_frac: float, bottom_frac: float,
                            height_frac: float) -> None:
         self._feed.width_frac  = max(0.2, min(1.0, float(width_frac)))

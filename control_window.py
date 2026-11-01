@@ -1657,6 +1657,20 @@ class ControlWindow(QWidget):
         self.spCmBg.valueChanged.connect(self._on_comment_bg_changed)
         g.addWidget(self.spCmBg, 1, 3)
 
+        g.addWidget(QLabel("文字の透明度:"), 2, 0)
+        self.spCmTextT = QSpinBox()
+        self.spCmTextT.setRange(0, 90)
+        self.spCmTextT.setSingleStep(5)
+        self.spCmTextT.setSuffix(" %")
+        self.spCmTextT.setSpecialValueText("0 % (透けない)")
+        self.spCmTextT.setMinimumHeight(30)
+        self.spCmTextT.setValue(int(round(self.display.comment_text_transparency() * 100)))
+        self.spCmTextT.setToolTip(
+            "フィードの文字の透け具合。0% = くっきり、大きいほど後ろの映像が透けて見えます (最大 90%)。\n"
+            "背景の黒い板には効きません (板は「背景の濃さ」で)。\nconfig: comment_text_transparency_pct")
+        self.spCmTextT.valueChanged.connect(self._on_comment_text_transparency_changed)
+        g.addWidget(self.spCmTextT, 2, 1)
+
         row = QHBoxLayout()
         self.cmEdit = QLineEdit()
         self.cmEdit.setPlaceholderText("テスト入力: ここに書いて「行を追加」で本機からフィードに出せます (<r> 等のタグ可)")
@@ -1674,7 +1688,7 @@ class ControlWindow(QWidget):
         self.btnCmClear.setMinimumHeight(32)
         self.btnCmClear.clicked.connect(self._local_comment_clear)
         row.addWidget(self.btnCmClear)
-        g.addLayout(row, 2, 0, 1, 4)
+        g.addLayout(row, 3, 0, 1, 4)
 
         row3 = QHBoxLayout()
         self.btnPrompt = QPushButton("🧠 システムプロンプト編集…  (名前も)")
@@ -1701,7 +1715,7 @@ class ControlWindow(QWidget):
         self.btnPocochaSync.clicked.connect(lambda: self._prompt_dialog_lazy().refresh_state())
         row3.addWidget(self.btnPocochaSync)
         row3.addStretch(1)
-        g.addLayout(row3, 3, 0, 1, 4)
+        g.addLayout(row3, 4, 0, 1, 4)
         # おわくさが最初の POST /ai で場所を名乗ったら、チェックの状態を取りに行く
         self.bridge.aiUrlChanged.connect(self._on_ai_url_changed)
 
@@ -1712,7 +1726,7 @@ class ControlWindow(QWidget):
             "「システムプロンプト編集」で、おわくさの人格・口調のプロンプトを配信中に差し替えられます。")
         note.setProperty("class", "small")
         note.setWordWrap(True)
-        g.addWidget(note, 4, 0, 1, 4)
+        g.addWidget(note, 5, 0, 1, 4)
         self._refresh_text_mode_ui()
         return box
 
@@ -2588,6 +2602,10 @@ class ControlWindow(QWidget):
 
     def _on_comment_bg_changed(self, pct: int) -> None:
         self.display.set_comment_bg_opacity(int(pct) / 100.0)
+
+    def _on_comment_text_transparency_changed(self, pct: int) -> None:
+        self.display.set_comment_text_transparency(int(pct) / 100.0)
+        self._log_local("ADMIN", f"COMMENT 文字の透明度: {pct}%")
 
     def _local_comment_send(self) -> None:
         text = self.cmEdit.text().strip()

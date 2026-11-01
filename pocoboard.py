@@ -121,6 +121,7 @@ def main() -> int:
     comment_bottom_pct = cfg.get_int("comment_bottom_pct", 4)
     comment_height_pct = cfg.get_int("comment_height_pct", 90)
     comment_bg_pct     = cfg.get_int("comment_bg_pct", 45)
+    comment_text_transparency_pct = cfg.get_int("comment_text_transparency_pct", 0)
     comment_scroll_ms  = cfg.get_int("comment_scroll_ms", 350)
     comment_show_time  = cfg.get_bool("comment_show_time", False)
     comment_spacing_pct = cfg.get_int("comment_spacing_pct", 40)
@@ -294,6 +295,7 @@ def main() -> int:
                                max(0, min(50, comment_bottom_pct)) / 100.0,
                                max(10, min(100, comment_height_pct)) / 100.0)
     display.set_comment_bg_opacity(max(0, min(100, comment_bg_pct)) / 100.0)
+    display.set_comment_text_transparency(max(0, min(90, comment_text_transparency_pct)) / 100.0)
     display.set_comment_scroll_ms(float(comment_scroll_ms))
     display.set_comment_show_time(comment_show_time)
     display.set_comment_spacing(max(0, min(200, comment_spacing_pct)) / 100.0)
