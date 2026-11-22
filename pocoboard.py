@@ -139,6 +139,8 @@ def main() -> int:
     # Control endpoint of おわくさ (GET/PUT /prompt).  Normally left empty:
     # owakusa.py announces it in the X-Poco-AI-Url header of every /ai call.
     ai_url             = cfg.get_str("ai_url", "")
+    # web 画面の「おわくさに言わせる」欄を使える端末のドメイン (逆引きの名前がこれで終わる LAN の端末と canary 自身)。空 = 欄を出さない
+    say_domain         = cfg.get_str("say_domain", "west")
     # Idle title: quiet seconds before it fades back in (0 = never) and
     # the fade-in duration.
     idle_return_sec    = cfg.get_int("idle_return_sec", 300)
@@ -241,6 +243,7 @@ def main() -> int:
     bridge.set_upload_limits(upload_image_mb, upload_video_mb, upload_audio_mb)
     bridge.set_ai_token(ai_token)
     bridge.set_ai_url(ai_url)
+    bridge.set_say_domain(say_domain)
     bridge.set_board_max(text_log_max)
 
     audio = AudioEngine()

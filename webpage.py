@@ -511,6 +511,8 @@ INDEX_HTML = r"""<!doctype html>
     display: none;
   }
   .mine-box.show { display: block; }
+  #sayBox { display: none; }
+  #sayBox.show { display: grid; }
   .marquee-box textarea {
     width: 100%;
     min-height: 86px;
@@ -843,6 +845,18 @@ INDEX_HTML = r"""<!doctype html>
     </div>
   </div>
 
+  <div class="marquee-box" id="sayBox">
+    <div class="marquee-row">
+      <strong>✍ おわくさに言わせる</strong>
+      <span id="sayCount">0</span>
+    </div>
+    <textarea id="sayText" maxlength="200"
+      placeholder="打った文を、おわくさが Pococha にそのままコメントします"></textarea>
+    <div class="marquee-row">
+      <button class="send" id="btnSay">投稿</button>
+    </div>
+  </div>
+
   <div class="board-box" id="boardBox">
     <div class="board-head">
       <strong>💬 画面の文字ログ</strong>
@@ -988,6 +1002,7 @@ async function refreshStatus() {
     }
     updateMineControls(j.mine || {image:false, video:false, audio:false});
     updatePianoOverlayHint(!!j.piano_mode);
+    document.getElementById('sayBox').classList.toggle('show', !!j.say);
   } catch (e) { /* network blip */ }
 }
 
@@ -1363,6 +1378,35 @@ document.getElementById('btnMqSend').onclick = async () => {
       toast('送信失敗: ' + reason);
     }
   } catch(e) { toast(e.message); }
+};
+const sayTextEl = document.getElementById('sayText');
+sayTextEl.addEventListener('input', () => {
+  document.getElementById('sayCount').textContent = [...sayTextEl.value].length;
+});
+document.getElementById('btnSay').onclick = async () => {
+  const text = sayTextEl.value.trim();
+  if (!text) return;
+  const btn = document.getElementById('btnSay');
+  btn.disabled = true;
+  try {
+    const r = await fetch(api('owakusa/say'), {
+      method: 'POST',
+      headers: {'Content-Type': 'text/plain; charset=utf-8'},
+      body: text
+    });
+    let j = {};
+    try { j = await r.json(); } catch(e) {}
+    if (r.ok && j.ok) {
+      sayTextEl.value = '';
+      document.getElementById('sayCount').textContent = '0';
+      toast(j.pococha ? 'おわくさに渡しました' : 'おわくさに渡しました (Pococha への投稿はオフ)');
+    } else {
+      const why = {not_allowed: 'この端末からは使えません', empty: '本文が空です',
+                   no_owakusa: 'おわくさが動いていません', disabled: '受付OFFです'}[j.reason];
+      toast('送信失敗: ' + (why || (r.status + ' ' + (j.reason || ''))));
+    }
+  } catch(e) { toast(e.message); }
+  btn.disabled = false;
 };
 document.getElementById('btnMqStop').onclick = async () => {
   try { await fetch(api('marquee/stop'), { method: 'POST' }); } catch(e) {}

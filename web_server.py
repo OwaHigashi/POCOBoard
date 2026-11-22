@@ -71,6 +71,8 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing      import Optional
+import urllib.error
+import urllib.request
 from urllib.parse import urlparse, parse_qs, quote, unquote
 
 from PySide6.QtCore import QObject, QTimer, Signal, Slot
@@ -161,6 +163,9 @@ class WebBridge(QObject):
         # Control endpoint of the AI (おわくさ) — from config ai_url, then
         # overwritten by the X-Poco-AI-Url header of every /ai request.
         self._ai_url = ""
+        # 「おわくさに言わせる」欄 (POST /owakusa/say) を使える相手のドメイン (config say_domain。空 = 欄を出さない)
+        self._say_domain = ""
+        self._say_cache: dict[str, tuple[str, float]] = {}
         # Scroll-back history of everything the text board has shown
         # (fed by DisplayWindow.textShown).  Monotonic ids let browsers
         # poll GET /board?since=<last id>; _board_epoch changes on every
@@ -284,6 +289,34 @@ class WebBridge(QObject):
     def ai_url(self) -> str:
         with self._lock:
             return self._ai_url
+
+    def set_say_domain(self, domain: str) -> None:
+        with self._lock:
+            self._say_domain = (domain or "").strip().strip(".").lower()
+
+    def say_host(self, ip: str) -> str:
+        """「おわくさに言わせる」欄を使ってよい相手か。ip (ソケットの相手。X-Forwarded-For は使わない) を逆引きした名前が
+        config say_domain (例 west) で終わり、その名前を正引きすると同じ ip に戻るなら、その名前。だめなら ''。
+        canary 自身 (127.0.0.1) は 'localhost'。結果は 5 分覚えておく (DHCP で IP が変わっても 5 分で追いつく)。"""
+        with self._lock:
+            domain = self._say_domain
+            hit = self._say_cache.get(ip)
+        if not domain:
+            return ""
+        if ip in ("127.0.0.1", "::1"):
+            return "localhost"
+        if hit and time.time() - hit[1] < 300:
+            return hit[0]
+        name = ""
+        try:
+            host = socket.gethostbyaddr(ip)[0].lower().rstrip(".")
+            if host.endswith("." + domain) and ip in socket.gethostbyname_ex(host)[2]:
+                name = host
+        except (OSError, UnicodeError):
+            pass
+        with self._lock:
+            self._say_cache[ip] = (name, time.time())
+        return name
 
     def ai_token_ok(self, presented: str) -> bool:
         with self._lock:
@@ -823,6 +856,7 @@ class _Handler(BaseHTTPRequestHandler):
                 # video will appear translucently on top of the keyboard.
                 "piano_mode": self.bridge.is_piano_mode(),
                 "text_mode": self.bridge.text_mode(),
+                "say": bool(self._say_host()),
             }, set_cookie=new_cookie)
             return
         if u.path == "/ai/status":
@@ -1009,6 +1043,52 @@ class _Handler(BaseHTTPRequestHandler):
                               "mode": snap["mode"]}, set_cookie=new_cookie)
 
     # ===== POST =====
+    def _say_host(self) -> str:
+        # 中継 (リバースプロキシ) を通ってきた要求は外から: ソケットの相手はプロキシなので、名前では判定しない
+        if self.headers.get("X-Forwarded-For"):
+            return ""
+        return self.bridge.say_host(self.client_address[0] if self.client_address else "")
+
+    def _owakusa_say(self) -> None:
+        """POST /owakusa/say (本文 = コメント): おわくさの制御口 PUT /say へ中継し、おわくさの一言として投稿させる。"""
+        cid, label, ip, new_cookie = self._who()
+        now_hms = time.strftime("%H:%M:%S")
+        host = self._say_host()
+        if not host:
+            self.bridge.emit_log("SAY", f"{now_hms}  {label:24s}  SAY       X REJECTED (not_lan_host)")
+            self._send_json(403, {"ok": False, "reason": "not_allowed"}, set_cookie=new_cookie)
+            return
+        if self._reject_if_not_allowed(cid, label, ip, "SAY", new_cookie):
+            return
+        try:
+            text = self._read_body(4096).decode("utf-8").strip()
+        except UnicodeDecodeError:
+            text = ""
+        if not text:
+            self._send_json(400, {"ok": False, "reason": "empty"}, set_cookie=new_cookie)
+            return
+        url = self.bridge.ai_url()
+        if not url:
+            self._send_json(503, {"ok": False, "reason": "no_owakusa"}, set_cookie=new_cookie)
+            return
+        headers = {"Content-Type": "application/json; charset=utf-8"}
+        tok = self.bridge.ai_token()
+        if tok:
+            headers["X-Poco-AI-Token"] = tok
+        data = json.dumps({"text": text, "src": f"web {host}"}, ensure_ascii=False).encode("utf-8")
+        try:
+            req = urllib.request.Request(url + "/say", data=data, headers=headers, method="PUT")
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                res = json.loads(resp.read().decode("utf-8") or "{}")
+        except urllib.error.HTTPError as e:
+            res = {"ok": False, "reason": f"owakusa_http_{e.code}"}
+        except Exception as e:      # noqa: BLE001 — おわくさが止まっている・届かない
+            res = {"ok": False, "reason": f"owakusa_unreachable: {type(e).__name__}"}
+        preview = text.replace("\n", " ")[:60]
+        self.bridge.emit_log("SAY", f"{now_hms}  {label:24s}  SAY       {'OK' if res.get('ok') else 'X ' + str(res.get('reason'))}"
+                                    f"  ({host})  {preview}")
+        self._send_json(200 if res.get("ok") else 502, res, set_cookie=new_cookie)
+
     def _reject_if_not_allowed(self, cid: str, label: str, ip: str,
                                log_tag: str,
                                new_cookie: Optional[str]) -> bool:
@@ -1166,6 +1246,10 @@ class _Handler(BaseHTTPRequestHandler):
 
         if path == "/ai":
             self._handle_ai(query)
+            return
+
+        if path == "/owakusa/say":
+            self._owakusa_say()
             return
 
         if path == "/marquee/stop":

@@ -435,6 +435,7 @@ http://<IP>:<port>/
 | POST | `/marquee?speed=1..5` | UTF-8 text | 横スクロール送信 |
 | POST | `/marquee/stop` | - | 横スクロール停止 |
 | POST | `/ai` | JSON（下記） | おわくさ AI の画面操作。`X-Poco-AI-Token` ヘッダ（`ai_token` 設定時） |
+| POST | `/owakusa/say` | text/plain（コメント） | web 画面の「✍ おわくさに言わせる」欄。おわくさの制御口 `PUT /say` へ中継し、おわくさが Pococha にそのまま投稿する。使えるのは接続元 IP の逆引きが `say_domain`（既定 `west`）で終わり正引きで同じ IP に戻る端末と canary 自身だけ（中継経由は不可）。`GET /status` の `say` が欄を出すかどうか |
 | GET | `/ai/status` | - | `{mode, comment:{count,size_pct}, marquee:{used,size_pct}, last_ai_ms, ai_url}` |
 | GET | `/gallery?since=N` | - | このセッションに画面へ出た画像・動画の一覧 `{epoch, last, items:[{id, no, day, t, kind, name, orig, size, who, poster?, note?}], posters:{動画名: ポスター名}}`（`no` = その日の通し番号（#1, #2, …。日付 `day` が変わると 1 から。`cache/gallery_no.json` に残る）、`kind` = image / video。`poster` は再生時に作る先頭フレームの JPEG。`note` は `/upload` の `note` をそのまま：おわくさの生成記録 `{who, request, subject, prompt_en, text, caption, model, blocked, sec, prev?, edit?}`）。起動ごとに空から。おわくさは 5 秒ごとにこれを見て視聴者の写真を知る |
 | GET | `/media/<name>` | `?dl=1` で保存 | `/gallery` に載っている画像・動画ファイル本体（それ以外の名前は 404）。`dl=1` で `Content-Disposition: attachment`（元のファイル名） |
